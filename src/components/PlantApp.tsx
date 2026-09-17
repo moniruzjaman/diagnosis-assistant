@@ -1,20 +1,22 @@
+"use client";
+
 import React, { useState, useEffect } from "react";
-import { 
-  Leaf, 
-  Search, 
-  Sparkles, 
-  BookOpen, 
-  Award, 
-  Activity, 
-  Info, 
-  X, 
-  ChevronRight, 
-  AlertCircle, 
-  CheckCircle2, 
-  HelpCircle, 
-  Columns, 
-  RotateCcw, 
-  Check, 
+import {
+  Leaf,
+  Search,
+  Sparkles,
+  BookOpen,
+  Award,
+  Activity,
+  Info,
+  X,
+  ChevronRight,
+  AlertCircle,
+  CheckCircle2,
+  HelpCircle,
+  Columns,
+  RotateCcw,
+  Check,
   ExternalLink,
   Brain,
   Gauge,
@@ -32,8 +34,8 @@ import {
   Clock
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { DatabaseSchema, DiagnosticKey, AIDiagnosisResult, QuizQuestion, HistoryScan } from "./types";
-import { TRANSLATIONS, BANGLA_CATEGORIES, BANGLA_PAGE_PREVIEWS } from "./translations";
+import { DatabaseSchema, DiagnosticKey, AIDiagnosisResult, QuizQuestion, HistoryScan } from "@/lib/types";
+import { TRANSLATIONS, BANGLA_CATEGORIES, BANGLA_PAGE_PREVIEWS } from "@/lib/translations";
 
 const CABI_CATEGORIES = [
   "Wilt",
