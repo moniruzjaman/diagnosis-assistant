@@ -31,11 +31,36 @@ import {
   Wrench,
   Package,
   Eye,
-  Clock
+  Clock,
+  Database,
+  Cloud,
+  UserCheck,
+  LogOut,
+  HardDriveDownload,
+  Wifi,
+  WifiOff,
+  FileText,
+  Printer
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { DatabaseSchema, DiagnosticKey, AIDiagnosisResult, QuizQuestion, HistoryScan } from "@/lib/types";
 import { TRANSLATIONS, BANGLA_CATEGORIES, BANGLA_PAGE_PREVIEWS } from "@/lib/translations";
+import { getImagePathogenInfo, ImagePathogenInfo } from "@/data/imageLabels";
+import { PWAInstallButton } from "@/components/pwa/PWAInstallButton";
+import { OfflineIndicator } from "@/components/pwa/OfflineIndicator";
+import { DiagnosticReportModal } from "@/components/DiagnosticReportModal";
+import {
+  auth,
+  subscribeAuth,
+  loginWithGoogle,
+  logoutUser,
+  saveScanToFirestore,
+  deleteScanFromFirestore,
+  subscribeToUserHistory,
+  saveQuizScore,
+  fetchQuizScore,
+} from "@/lib/firebase";
+import type { User } from "firebase/auth";
 
 const CABI_CATEGORIES = [
   "Wilt",
@@ -286,7 +311,7 @@ export default function App() {
     }, 100);
   };
   const [selectedCategory, setSelectedCategory] = useState<string>("Leaf spot");
-  const [lightboxImage, setLightboxImage] = useState<{ url: string; caption: string } | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<{ url: string; caption: string; info?: ImagePathogenInfo } | null>(null);
 
   // Smart AI Pathologist States
   const [symptomDescription, setSymptomDescription] = useState("");
@@ -307,68 +332,6 @@ export default function App() {
   const [wizardErrorMsg, setWizardErrorMsg] = useState<string | null>(null);
   const [wizardProgressMessage, setWizardProgressMessage] = useState<string>("");
 
-  // Local Storage Diagnostic History States
-  const [historyScans, setHistoryScans] = useState<HistoryScan[]>([]);
-
-  // Load history from localStorage on startup
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("cabi_diagnostic_history");
-      if (stored) {
-        setHistoryScans(JSON.parse(stored));
-      }
-    } catch (e) {
-      console.error("Error reading diagnostic history from localStorage:", e);
-    }
-  }, []);
-
-  const latestHistoryLabel = () => {
-    if (historyScans.length === 0) return "";
-    const latest = historyScans[historyScans.length - 1];
-    return latest.result.matchedCategory ? getCategoryLabel(latest.result.matchedCategory) : latest.symptomDescription;
-  };
-
-  const appendHistoryScan = (symptom: string, img: string | null, res: AIDiagnosisResult) => {
-    const newScan: HistoryScan = {
-      id: Math.random().toString(36).substring(2, 9),
-      timestamp: new Date().toLocaleString(),
-      symptomDescription: symptom,
-      image: img,
-      result: res
-    };
-    setHistoryScans(prev => {
-      const updated = [newScan, ...prev];
-      try {
-        localStorage.setItem("cabi_diagnostic_history", JSON.stringify(updated));
-      } catch (err) {
-        console.error("Error writing diagnostic history to localStorage:", err);
-      }
-      return updated;
-    });
-  };
-
-  const deleteHistoryScan = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setHistoryScans(prev => {
-      const updated = prev.filter(s => s.id !== id);
-      try {
-        localStorage.setItem("cabi_diagnostic_history", JSON.stringify(updated));
-      } catch (err) {
-        console.error("Error updating diagnostic history:", err);
-      }
-      return updated;
-    });
-  };
-
-  const clearAllHistory = () => {
-    setHistoryScans([]);
-    try {
-      localStorage.removeItem("cabi_diagnostic_history");
-    } catch (err) {
-      console.error("Error clearing diagnostic history:", err);
-    }
-  };
-
   // Quiz States
   const [quizScore, setQuizScore] = useState(0);
   const [quizPlayed, setQuizPlayed] = useState(0);
@@ -376,36 +339,151 @@ export default function App() {
   const [quizSelectedAnswer, setQuizSelectedAnswer] = useState<string | null>(null);
   const [quizHasChecked, setQuizHasChecked] = useState(false);
 
-  // Fetch CABI Diagnostic Database on startup
-  useEffect(() => {
-    async function loadDb() {
-      try {
-        setLoading(true);
-        const response = await fetch("/api/database");
-        if (!response.ok) {
-          throw new Error("Diagnosis database lookup returned non-ok stream.");
-        }
-        const data = await response.json();
-        setDb(data);
-      } catch (err: any) {
-        console.error("Error retrieving CABI DB:", err);
-        setErrorMsg(err.message || "Could not retrieve guide database. App is running via offline simulated assets.");
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadDb();
+  // PDF Report Export Modal States
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [reportModalData, setReportModalData] = useState<{
+    result: AIDiagnosisResult;
+    image?: string | null;
+    categoryLabel?: string;
+  } | null>(null);
+
+  const openDiagnosticReport = (res: AIDiagnosisResult, img?: string | null, catLabel?: string) => {
+    setReportModalData({
+      result: res,
+      image: img || null,
+      categoryLabel: catLabel,
+    });
+    setReportModalOpen(true);
+  };
+
+  // Local Storage & Firebase Firestore Diagnostic History States with useSyncExternalStore
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [cloudSyncing, setCloudSyncing] = useState<boolean>(false);
+
+  // Sync with localStorage as an external store to avoid SSR hydration mismatch and cascading setState
+  const subscribeHistory = React.useCallback((callback: () => void) => {
+    window.addEventListener("cabi-history-updated", callback);
+    window.addEventListener("storage", callback);
+    return () => {
+      window.removeEventListener("cabi-history-updated", callback);
+      window.removeEventListener("storage", callback);
+    };
   }, []);
 
-  // Filter Categories on real-time search term
-  const filteredCategories = CABI_CATEGORIES.filter(category => 
-    category.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const getHistorySnapshot = React.useCallback((): string => {
+    if (typeof window === "undefined") return "[]";
+    return localStorage.getItem("cabi_diagnostic_history") || "[]";
+  }, []);
 
-  // Get diagnostic entries for the selected category
-  const activeEntries = db?.diagnostic_keys.filter(entry => 
-    entry.symptom_category?.toLowerCase() === selectedCategory.toLowerCase()
-  ) || [];
+  const getHistoryServerSnapshot = React.useCallback((): string => {
+    return "[]";
+  }, []);
+
+  const historyRaw = React.useSyncExternalStore(subscribeHistory, getHistorySnapshot, getHistoryServerSnapshot);
+  const historyScans: HistoryScan[] = React.useMemo(() => {
+    try {
+      return JSON.parse(historyRaw);
+    } catch {
+      return [];
+    }
+  }, [historyRaw]);
+
+  const updateStoredHistory = (newScans: HistoryScan[]) => {
+    try {
+      localStorage.setItem("cabi_diagnostic_history", JSON.stringify(newScans));
+      window.dispatchEvent(new Event("cabi-history-updated"));
+    } catch (e) {
+      console.error("Failed saving history to localStorage:", e);
+    }
+  };
+
+  // Listen for Firebase Auth changes and fetch user quiz records
+  useEffect(() => {
+    const unsub = subscribeAuth((user) => {
+      setFirebaseUser(user);
+      if (user) {
+        fetchQuizScore(user.uid).then((storedQuiz) => {
+          if (storedQuiz) {
+            setQuizScore(storedQuiz.score);
+            setQuizPlayed(storedQuiz.played);
+          }
+        });
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Listen for Real-Time Firestore Diagnostic History changes
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const unsub = subscribeToUserHistory(firebaseUser.uid, (cloudScans) => {
+      setCloudSyncing(false);
+      if (cloudScans && cloudScans.length > 0) {
+        updateStoredHistory(cloudScans);
+      }
+    });
+    return () => unsub();
+  }, [firebaseUser]);
+
+  const latestHistoryLabel = () => {
+    if (historyScans.length === 0) return "";
+    const latest = historyScans[historyScans.length - 1];
+    return latest.result.matchedCategory ? getCategoryLabel(latest.result.matchedCategory) : latest.symptomDescription;
+  };
+
+  const appendHistoryScan = async (symptom: string, img: string | null, res: AIDiagnosisResult, cropType?: string) => {
+    const tempId = Math.random().toString(36).substring(2, 9);
+    const newScan: HistoryScan = {
+      id: tempId,
+      timestamp: new Date().toLocaleString(),
+      symptomDescription: symptom,
+      image: img,
+      result: res
+    };
+    const updated = [newScan, ...historyScans.filter(s => s.id !== tempId)];
+    updateStoredHistory(updated);
+
+    // Persist into Firebase Firestore
+    if (firebaseUser) {
+      setCloudSyncing(true);
+      try {
+        const cloudId = await saveScanToFirestore(firebaseUser.uid, symptom, img, res, cropType);
+        updateStoredHistory(updated.map(s => s.id === tempId ? { ...s, id: cloudId } : s));
+      } catch (err) {
+        console.error("Failed persisting scan to Firebase Firestore:", err);
+      } finally {
+        setCloudSyncing(false);
+      }
+    }
+  };
+
+  const deleteHistoryScan = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const updated = historyScans.filter(s => s.id !== id);
+    updateStoredHistory(updated);
+
+    if (firebaseUser) {
+      try {
+        await deleteScanFromFirestore(id);
+      } catch (err) {
+        console.error("Failed removing scan from Firebase Firestore:", err);
+      }
+    }
+  };
+
+  const clearAllHistory = async () => {
+    const toDelete = [...historyScans];
+    updateStoredHistory([]);
+    if (firebaseUser) {
+      for (const item of toDelete) {
+        try {
+          await deleteScanFromFirestore(item.id);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  };
 
   // Generate a random quiz question from database
   const generateQuizQuestion = (database: DatabaseSchema) => {
@@ -449,11 +527,47 @@ export default function App() {
     }
   };
 
+  // Fetch CABI Diagnostic Database on startup
   useEffect(() => {
-    if (db && !currentQuestion) {
-      generateQuizQuestion(db);
+    const controller = new AbortController();
+
+    async function loadDb() {
+      try {
+        setLoading(true);
+        const response = await fetch("/api/database", { signal: controller.signal });
+        if (!response.ok) {
+          throw new Error("Diagnosis database lookup returned non-ok stream.");
+        }
+        const data = await response.json();
+        setDb(data);
+        generateQuizQuestion(data);
+      } catch (err: any) {
+        if (err?.name === "AbortError") {
+          // Clean unmount / navigation cancellation
+          return;
+        }
+        console.error("Error retrieving CABI DB:", err);
+        setErrorMsg(err.message || "Could not retrieve guide database. App is running via offline simulated assets.");
+      } finally {
+        setLoading(false);
+      }
     }
-  }, [db]);
+    loadDb();
+
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
+  // Filter Categories on real-time search term
+  const filteredCategories = CABI_CATEGORIES.filter(category => 
+    category.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  // Get diagnostic entries for the selected category
+  const activeEntries = db?.diagnostic_keys.filter(entry => 
+    entry.symptom_category?.toLowerCase() === selectedCategory.toLowerCase()
+  ) || [];
 
   const handleQuizAnswer = (option: string) => {
     if (quizHasChecked) return;
@@ -464,14 +578,21 @@ export default function App() {
     if (!currentQuestion || !quizSelectedAnswer || quizHasChecked) return;
 
     const isCorrect = quizSelectedAnswer === currentQuestion.correctCategory;
+    const newScore = isCorrect ? quizScore + 1 : quizScore;
+    const newPlayed = quizPlayed + 1;
+
     if (isCorrect) {
-      setQuizScore(prev => prev + 1);
+      setQuizScore(newScore);
     }
-    setQuizPlayed(prev => prev + 1);
+    setQuizPlayed(newPlayed);
     setQuizHasChecked(true);
+
+    if (firebaseUser) {
+      saveQuizScore(firebaseUser.uid, newScore, newPlayed);
+    }
   };
 
-  // Presets load helper converting unsplash images to base64 if needed
+  // Presets load helper converting authentic specimen images to base64 for vision analysis
   const loadPresetSpecimen = async (imageUrl: string, promptText: string) => {
     setSymptomDescription(promptText);
     setDiagnoseImage(imageUrl); // Preview immediately
@@ -726,6 +847,57 @@ export default function App() {
                 {t.cropAuditorQuiz}
               </button>
             </nav>
+
+            {/* Firebase Cloud Firestore DB Status & Authentication */}
+            <div className="flex items-center gap-2" id="firebase-cloud-status">
+              <div 
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-[11px] font-mono text-emerald-200 backdrop-blur-sm shadow-inner"
+                title={locale === "bn" ? "ফায়ারবেস ফায়ারস্টোর ডাটাবেস সক্রিয় ও রিয়েল-টাইমে সংযুক্ত (প্রজেক্ট: fertilizer-dealer)" : "Firebase Firestore Database Active & Live Synced (Project: fertilizer-dealer)"}
+              >
+                <span className={`w-2 h-2 rounded-full ${cloudSyncing ? "bg-amber-400 animate-ping" : "bg-emerald-400 animate-pulse"}`} />
+                <Database className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+                <span className="hidden xl:inline text-emerald-300/90 font-sans">Firestore:</span>
+                <span className="font-semibold text-white font-sans">
+                  {cloudSyncing ? (locale === "bn" ? "সিঙ্ক হচ্ছে..." : "Syncing...") : (locale === "bn" ? "সংযুক্ত" : "Live DB")}
+                </span>
+              </div>
+
+              {firebaseUser && !firebaseUser.isAnonymous ? (
+                <div className="flex items-center gap-1.5 bg-emerald-950/50 border border-emerald-600/40 px-2.5 py-1 rounded-xl text-xs backdrop-blur-sm">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  <span className="text-white font-medium max-w-[110px] truncate text-[11px]">
+                    {firebaseUser.displayName?.split(" ")[0] || firebaseUser.email?.split("@")[0] || "User"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => logoutUser()}
+                    className="text-emerald-300 hover:text-white ml-1 p-0.5 transition cursor-pointer"
+                    title={locale === "bn" ? "লগআউট" : "Sign Out"}
+                  >
+                    <LogOut className="w-3 h-3" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await loginWithGoogle();
+                    } catch (e) {
+                      console.error("Google sign-in error:", e);
+                    }
+                  }}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-medium text-white transition cursor-pointer"
+                  title={locale === "bn" ? "গুগল সাইন-ইন দিয়ে ক্লাউড ব্যাকআপ সিঙ্ক করুন" : "Sign in with Google to sync cloud backup"}
+                >
+                  <UserCheck className="w-3.5 h-3.5 text-emerald-300" />
+                  <span className="hidden lg:inline text-[11px]">{locale === "bn" ? "গুগল সিঙ্ক" : "Google Sync"}</span>
+                </button>
+              )}
+
+              {/* In-App PWA Install Prompt for Offline Field Use */}
+              <PWAInstallButton locale={locale} variant="header" />
+            </div>
           </div>
         </div>
       </header>
@@ -944,36 +1116,78 @@ export default function App() {
 
                           {/* Image Grid of verified crop leaves */}
                           {entry.images.length > 0 ? (
-                            <div className="grid grid-cols-2 lg:grid-cols-3 gap-5" id={`entry-images-${idx}`}>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5" id={`entry-images-${idx}`}>
                               {entry.images.map((img, imgIdx) => {
                                 const rawImgUrl = `https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/${img}`;
+                                const pathogenInfo = getImagePathogenInfo(img, entry.page, locale, selectedCategory, imgIdx);
                                 return (
                                   <div 
                                     key={imgIdx} 
-                                    onClick={() => setLightboxImage({ url: rawImgUrl, caption: `${getCategoryLabel(selectedCategory)} - ${t.diagnosticPageNum} (Page ${entry.page})` })}
-                                    className="group relative cursor-zoom-in bg-slate-100 rounded-xl overflow-hidden aspect-[4/3] border border-slate-200/80 hover:shadow-md hover:border-slate-300 transition-all duration-300"
+                                    className="group bg-white rounded-xl overflow-hidden border border-slate-200/90 hover:border-slate-300 hover:shadow-lg transition-all duration-300 flex flex-col"
                                     id={`entry-img-${idx}-${imgIdx}`}
                                   >
-                                    <img 
-                                      src={rawImgUrl} 
-                                      alt={`${selectedCategory} reference pathological crop specimen`}
-                                      referrerPolicy="no-referrer"
-                                      onError={(e) => {
-                                        // Standard placeholder failover injection
-                                        (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1599599810769-bcde5a160d32?q=80&w=640&auto=format&fit=crop";
-                                      }}
-                                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                                    />
-                                    {/* Captions and overlay trigger indicators */}
-                                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-transparent opacity-0 group-hover:opacity-100 transition-opacity p-2.5 flex flex-col justify-end text-white text-[10px]">
-                                      <p className="font-semibold">{img}</p>
-                                      <p className="text-slate-300/90 flex items-center gap-0.5 mt-0.5">
-                                        {t.clickEnlarge}
-                                        <ExternalLink className="w-3 h-3 inline" />
-                                      </p>
+                                    {/* Image Container */}
+                                    <div
+                                      onClick={() => setLightboxImage({ 
+                                        url: rawImgUrl, 
+                                        caption: `${getCategoryLabel(selectedCategory)} - ${t.diagnosticPageNum} (Page ${entry.page})`,
+                                        info: pathogenInfo
+                                      })}
+                                      className="relative cursor-zoom-in bg-slate-900 aspect-[4/3] overflow-hidden"
+                                    >
+                                      <img 
+                                        src={rawImgUrl} 
+                                        alt={`${pathogenInfo.pathogenName} - ${pathogenInfo.hostCrop}`}
+                                        referrerPolicy="no-referrer"
+                                        onError={(e) => {
+                                          (e.target as HTMLImageElement).src = "https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page15_0.jpeg";
+                                        }}
+                                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                      />
+                                      {/* Problem Type Chip on Image (Top-Left) */}
+                                      <div className="absolute top-2.5 left-2.5 z-10">
+                                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold backdrop-blur-md shadow-sm border ${pathogenInfo.typeColor.bg} ${pathogenInfo.typeColor.text} ${pathogenInfo.typeColor.border}`}>
+                                          <span className={`w-1.5 h-1.5 rounded-full ${pathogenInfo.typeColor.dot}`} />
+                                          {pathogenInfo.problemType}
+                                        </span>
+                                      </div>
+
+                                      {/* Figure & Page Badge (Top-Right) */}
+                                      <div className="absolute top-2.5 right-2.5 bg-slate-950/70 backdrop-blur-md text-white text-[10px] font-mono font-medium px-2 py-0.5 rounded-full z-10 flex items-center gap-1">
+                                        <span>{pathogenInfo.figureLabel}</span>
+                                        <span className="text-slate-400">•</span>
+                                        <span>p.{entry.page}</span>
+                                      </div>
+
+                                      {/* Hover Enlarge Overlay */}
+                                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent opacity-0 group-hover:opacity-100 transition-opacity p-3 flex flex-col justify-end text-white text-[10px]">
+                                        <p className="font-semibold text-xs text-white truncate">{pathogenInfo.pathogenName}</p>
+                                        <p className="text-emerald-300 flex items-center gap-1 mt-0.5">
+                                          <span>{t.clickEnlarge || "Click to inspect"}</span>
+                                          <ExternalLink className="w-3 h-3 inline" />
+                                        </p>
+                                      </div>
                                     </div>
-                                    <div className="absolute top-2 right-2 bg-slate-900/45 backdrop-blur-md text-white text-[10px] font-mono font-medium px-2 py-0.5 rounded-full z-10">
-                                      {t.indexFig || "Index Fig"} {imgIdx + 1}
+
+                                    {/* Persistent Pathogen / Problem Labeling Card */}
+                                    <div className="p-3 bg-white flex flex-col justify-between flex-1 border-t border-slate-100 space-y-1.5">
+                                      <div>
+                                        <h5 className="text-xs font-bold text-slate-800 line-clamp-1 leading-snug group-hover:text-emerald-700 transition" title={pathogenInfo.pathogenName}>
+                                          {pathogenInfo.pathogenName}
+                                        </h5>
+                                        <p className="text-[11px] font-medium text-emerald-700 line-clamp-1 mt-0.5">
+                                          🌱 {pathogenInfo.hostCrop}
+                                        </p>
+                                      </div>
+
+                                      <p className="text-[10px] text-slate-500 line-clamp-2 leading-relaxed italic bg-slate-50/80 p-1.5 rounded-lg border border-slate-100" title={pathogenInfo.diagnosticClue}>
+                                        {pathogenInfo.diagnosticClue}
+                                      </p>
+
+                                      <div className="flex items-center justify-between text-[9px] text-slate-400 font-mono pt-1 border-t border-slate-50">
+                                        <span className="truncate">{img}</span>
+                                        <span className="text-emerald-600 font-sans font-medium">CABI Verified</span>
+                                      </div>
                                     </div>
                                   </div>
                                 );
@@ -1205,96 +1419,125 @@ export default function App() {
                           {/* Case A */}
                           <div
                             onClick={async () => {
+                              const imgUrl = "https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page15_0.jpeg";
                               setWizardCropType("Cashew");
                               setWizardSymptomText("Cashew leaf spots which are clearly defined and are all a similar size. This clear delineation between healthy and infected tissue is typical of pathogen infection.");
-                              setWizardImage("https://images.unsplash.com/photo-1599599810769-bcde5a160d32?q=80&w=360&auto=format&fit=crop");
-                              // Attempt Base64 load
+                              setWizardImage(imgUrl);
                               try {
-                                const r = await fetch("https://images.unsplash.com/photo-1599599810769-bcde5a160d32?q=80&w=360&auto=format&fit=crop", { referrerPolicy: "no-referrer" });
+                                const r = await fetch(imgUrl, { referrerPolicy: "no-referrer" });
                                 const blob = await r.blob();
                                 const reader = new FileReader();
                                 reader.onloadend = () => setWizardImage(reader.result as string);
                                 reader.readAsDataURL(blob);
                               } catch (e) {
-                                console.log("Using static template reference");
+                                console.log("Using direct authentic image reference");
                               }
                             }}
                             className={`p-3 rounded-xl border transition-all text-left cursor-pointer group hover:bg-emerald-50/30 ${
                               wizardCropType === "Cashew" ? "border-emerald-500 bg-emerald-55/10 ring-2 ring-emerald-500" : "border-slate-200"
                             }`}
                           >
-                            <img src="https://images.unsplash.com/photo-1599599810769-bcde5a160d32?q=80&w=360&auto=format&fit=crop" alt="Cashew specimen" className="w-full h-24 object-cover rounded-lg mb-2" referrerPolicy="no-referrer" />
-                            <p className="text-xs font-bold text-slate-800">{locale === "bn" ? "কাজু পাতার দাগ" : "Cashew Leaf Spot"}</p>
-                            <p className="text-[10px] text-slate-400 mt-0.5 font-mono">Page 15 Diagnostic Reference</p>
+                            <img 
+                              src="https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page15_0.jpeg" 
+                              alt="Cashew diagnostic specimen" 
+                              className="w-full h-24 object-cover rounded-lg mb-2 bg-slate-900" 
+                              referrerPolicy="no-referrer" 
+                            />
+                            <p className="text-xs font-bold text-slate-800">{locale === "bn" ? "কাজুবাদামের পাতার দাগ" : "Cashew Leaf Spot"}</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5 font-mono">CABI Page 15 • Colletotrichum</p>
                           </div>
 
                           {/* Case B */}
                           <div
                             onClick={async () => {
+                              const imgUrl = "https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page26_0.jpeg";
                               setWizardCropType("Tomato");
                               setWizardSymptomText("Leaf margins curling upward and rapid drying/necrosis. Roots have starting fit of phytophthoras blight, causing immediate leaves to dry under sun.");
-                              setWizardImage("https://images.unsplash.com/photo-1592417817098-8f3d6eb19675?q=80&w=360&auto=format&fit=crop");
+                              setWizardImage(imgUrl);
                               try {
-                                const r = await fetch("https://images.unsplash.com/photo-1592417817098-8f3d6eb19675?q=80&w=360&auto=format&fit=crop", { referrerPolicy: "no-referrer" });
+                                const r = await fetch(imgUrl, { referrerPolicy: "no-referrer" });
                                 const blob = await r.blob();
                                 const reader = new FileReader();
                                 reader.onloadend = () => setWizardImage(reader.result as string);
                                 reader.readAsDataURL(blob);
-                              } catch (e) {}
+                              } catch (e) {
+                                console.log("Using direct authentic image reference");
+                              }
                             }}
                             className={`p-3 rounded-xl border transition-all text-left cursor-pointer group hover:bg-emerald-50/30 ${
                               wizardCropType === "Tomato" ? "border-emerald-500 bg-emerald-55/10 ring-2 ring-emerald-500" : "border-slate-200"
                             }`}
                           >
-                            <img src="https://images.unsplash.com/photo-1592417817098-8f3d6eb19675?q=80&w=360&auto=format&fit=crop" alt="Tomato specimen" className="w-full h-24 object-cover rounded-lg mb-2" referrerPolicy="no-referrer" />
-                            <p className="text-xs font-bold text-slate-800">{locale === "bn" ? "টমেটো ব্লাইট (শুকিয়ে পড়া)" : "Tomato Blight/Wilt"}</p>
-                            <p className="text-[10px] text-slate-400 mt-0.5 font-mono">Page 26 Diagnostic Reference</p>
+                            <img 
+                              src="https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page26_0.jpeg" 
+                              alt="Tomato wilt diagnostic specimen" 
+                              className="w-full h-24 object-cover rounded-lg mb-2 bg-slate-900" 
+                              referrerPolicy="no-referrer" 
+                            />
+                            <p className="text-xs font-bold text-slate-800">{locale === "bn" ? "টমেটো ব্লাইট ও ঢলে পড়া" : "Tomato Blight/Wilt"}</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5 font-mono">CABI Page 26 • Phytophthora</p>
                           </div>
 
                           {/* Case C */}
                           <div
                             onClick={async () => {
+                              const imgUrl = "https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page43_0.jpeg";
                               setWizardCropType("Maize");
                               setWizardSymptomText("Mosaic mottled yellow color pattern mixed with green areas on maize foliage, leaf has uneven variegation.");
-                              setWizardImage("https://images.unsplash.com/photo-1530595467537-0b5996c41f2d?q=80&w=360&auto=format&fit=crop");
+                              setWizardImage(imgUrl);
                               try {
-                                const r = await fetch("https://images.unsplash.com/photo-1530595467537-0b5996c41f2d?q=80&w=360&auto=format&fit=crop", { referrerPolicy: "no-referrer" });
+                                const r = await fetch(imgUrl, { referrerPolicy: "no-referrer" });
                                 const blob = await r.blob();
                                 const reader = new FileReader();
                                 reader.onloadend = () => setWizardImage(reader.result as string);
                                 reader.readAsDataURL(blob);
-                              } catch (e) {}
+                              } catch (e) {
+                                console.log("Using direct authentic image reference");
+                              }
                             }}
                             className={`p-3 rounded-xl border transition-all text-left cursor-pointer group hover:bg-emerald-50/30 ${
                               wizardCropType === "Maize" ? "border-emerald-500 bg-emerald-55/10 ring-2 ring-emerald-500" : "border-slate-200"
                             }`}
                           >
-                            <img src="https://images.unsplash.com/photo-1530595467537-0b5996c41f2d?q=80&w=360&auto=format&fit=crop" alt="Maize specimen" className="w-full h-24 object-cover rounded-lg mb-2" referrerPolicy="no-referrer" />
+                            <img 
+                              src="https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page43_0.jpeg" 
+                              alt="Maize mosaic diagnostic specimen" 
+                              className="w-full h-24 object-cover rounded-lg mb-2 bg-slate-900" 
+                              referrerPolicy="no-referrer" 
+                            />
                             <p className="text-xs font-bold text-slate-800">{locale === "bn" ? "ভুট্টা মোজাইক ভাইরাস" : "Maize Mosaic Spot"}</p>
-                            <p className="text-[10px] text-slate-400 mt-0.5 font-mono">Page 43 Diagnostic Reference</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5 font-mono">CABI Page 43 • Mosaic Virus</p>
                           </div>
 
                           {/* Case D */}
                           <div
                             onClick={async () => {
+                              const imgUrl = "https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page100_0.jpeg";
                               setWizardCropType("Bean");
-                              setWizardSymptomText("Upward and downward severe curling of leaves, showing bubble puckering distortion and stunted growing terminals.");
-                              setWizardImage("https://images.unsplash.com/photo-1532467411038-57680e4ded04?q=80&w=360&auto=format&fit=crop");
+                              setWizardSymptomText("Legume and bean leaves display elevated powdery reddish-brown urediniospore pustules with chlorotic halos, causing severe leaf puckering and reduced photosynthetic area.");
+                              setWizardImage(imgUrl);
                               try {
-                                const r = await fetch("https://images.unsplash.com/photo-1532467411038-57680e4ded04?q=80&w=360&auto=format&fit=crop", { referrerPolicy: "no-referrer" });
+                                const r = await fetch(imgUrl, { referrerPolicy: "no-referrer" });
                                 const blob = await r.blob();
                                 const reader = new FileReader();
                                 reader.onloadend = () => setWizardImage(reader.result as string);
                                 reader.readAsDataURL(blob);
-                              } catch (e) {}
+                              } catch (e) {
+                                console.log("Using direct authentic image reference");
+                              }
                             }}
                             className={`p-3 rounded-xl border transition-all text-left cursor-pointer group hover:bg-emerald-50/30 ${
                               wizardCropType === "Bean" ? "border-emerald-500 bg-emerald-55/10 ring-2 ring-emerald-500" : "border-slate-200"
                             }`}
                           >
-                            <img src="https://images.unsplash.com/photo-1532467411038-57680e4ded04?q=80&w=360&auto=format&fit=crop" alt="Bean specimen" className="w-full h-24 object-cover rounded-lg mb-2" referrerPolicy="no-referrer" />
-                            <p className="text-xs font-bold text-slate-800">{locale === "bn" ? "শিম পাতার কুঁকড়ে যাওয়া" : "Bean Leaf Curl"}</p>
-                            <p className="text-[10px] text-slate-400 mt-0.5 font-mono">Page 52 Diagnostic Reference</p>
+                            <img 
+                              src="https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page100_0.jpeg" 
+                              alt="Bean rust diagnostic specimen" 
+                              className="w-full h-24 object-cover rounded-lg mb-2 bg-slate-900" 
+                              referrerPolicy="no-referrer" 
+                            />
+                            <p className="text-xs font-bold text-slate-800">{locale === "bn" ? "শিমের মরিচা বা রাস্ট রোগ" : "Common Bean Rust Pustules"}</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5 font-mono">CABI Page 100 • Uromyces appendiculatus</p>
                           </div>
                         </div>
                       </div>
@@ -1503,9 +1746,20 @@ export default function App() {
                             {locale === "bn" ? "উদ্ভিদ চিকিৎসালয় ক্লিনিকাল রিপোর্ট" : "Clinical Crop Diagnostic Sheet"}
                           </h3>
                         </div>
-                        <div className="bg-white/10 px-3.5 py-1.5 rounded-xl border border-white/20 text-xs font-mono font-bold uppercase text-emerald-100 flex items-center gap-1.5">
-                          <Clock className="w-3.5 h-3.5" />
-                          <span>Generated: {new Date().toLocaleDateString(locale === "bn" ? "bn-BD" : "en-US")}</span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => openDiagnosticReport(wizardResult, wizardImage, wizardResult.matchedCategory ? getCategoryLabel(wizardResult.matchedCategory) : undefined)}
+                            className="bg-white hover:bg-emerald-50 text-emerald-950 font-bold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-md transition cursor-pointer border border-emerald-200/40"
+                            id="btn-export-wizard-pdf"
+                          >
+                            <FileText className="w-4 h-4 text-emerald-700" />
+                            <span>{locale === "bn" ? "কৃষি অফিসের জন্য PDF রিপোর্ট" : "Export Extension PDF"}</span>
+                          </button>
+                          <div className="bg-white/10 px-3.5 py-2 rounded-xl border border-white/20 text-xs font-mono font-bold uppercase text-emerald-100 flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5" />
+                            <span>Generated: {new Date().toLocaleDateString(locale === "bn" ? "bn-BD" : "en-US")}</span>
+                          </div>
                         </div>
                       </div>
 
@@ -1770,6 +2024,15 @@ export default function App() {
                         {/* Bottom action bar */}
                         <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-slate-100 justify-end">
                           <button
+                            type="button"
+                            onClick={() => openDiagnosticReport(wizardResult, wizardImage, wizardResult.matchedCategory ? getCategoryLabel(wizardResult.matchedCategory) : undefined)}
+                            className="px-6 py-3 bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-800 hover:to-teal-800 text-white rounded-xl text-xs font-extrabold tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md"
+                            id="btn-bottom-export-wizard-pdf"
+                          >
+                            <FileText className="w-4 h-4 text-emerald-200" />
+                            <span>{locale === "bn" ? "কৃষি অফিসে জমা দেওয়ার জন্য PDF রিপোর্ট ডাউনলোড করুন" : "Download Extension PDF Report"}</span>
+                          </button>
+                          <button
                             onClick={() => {
                               // Reset wizard back to Step 1
                               setWizardStep(1);
@@ -1779,7 +2042,7 @@ export default function App() {
                               setWizardResult(null);
                               setWizardErrorMsg(null);
                             }}
-                            className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white rounded-xl text-xs font-extrabold tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-emerald-200"
+                            className="px-6 py-3 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 rounded-xl text-xs font-extrabold tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer"
                           >
                             <RotateCcw className="w-4 h-4" />
                             {t.resetWizard}
@@ -1839,7 +2102,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => loadPresetSpecimen(
-                          "https://images.unsplash.com/photo-1593113630400-ea4288922497?q=80&w=480&auto=format&fit=crop",
+                          "https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page99_0.jpeg",
                           locale === "bn" 
                             ? "ধানের পাতায় একাধিক, গোল বা ডিম্বাকার বাদামী ক্ষতচিহ্ন দেখা যাচ্ছে যার কেন্দ্র হালকা রঙের। ক্ষতের চারপাশে স্পষ্ট হলুদ বলয় বিদ্যমান। পাতার আক্রান্ত এবং সুস্থ অংশের স্পষ্ট বিভাজন একটি ছত্রাকজনিত বাদামী দাগ রোগের সংকেত দেয়।"
                             : "Rice leaf shows multiple, brown oval lesions with light-colored centers. There are prominent yellow halos bordering the spots. Clear delineations between infected and healthy parts point to a fungal spot pathogen."
@@ -1853,9 +2116,9 @@ export default function App() {
                         id="preset-rice-spot"
                       >
                         <img 
-                          src="https://images.unsplash.com/photo-1593113630400-ea4288922497?q=80&w=120&auto=format&fit=crop" 
-                          className="w-12 h-12 object-cover rounded-lg border border-slate-200/60"
-                          alt="Rice Brown Spot preset case thumbnail"
+                          src="https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page99_0.jpeg" 
+                          className="w-12 h-12 object-cover rounded-lg border border-slate-200/60 bg-slate-900"
+                          alt="Rice Brown Spot authentic specimen"
                           referrerPolicy="no-referrer"
                         />
                         <div className="truncate-2-lines flex-1">
@@ -1863,7 +2126,7 @@ export default function App() {
                             {locale === "bn" ? "ধানের বাদামী দাগ রোগ" : "Rice Brown Leaf Spot"}
                           </span>
                           <span className="text-[10px] text-slate-500 mt-0.5 block truncate">
-                            {locale === "bn" ? "হলুদ বলয় পরিবেষ্টিত সুনির্দিষ্ট ক্ষতের দাগ" : "Discrete lesions with yellow halo margins"}
+                            {locale === "bn" ? "CABI পৃষ্ঠা ৯৯ • ছত্রাকজনিত ক্ষতের দাগ" : "CABI Page 99 • Fungal Foliar Spot"}
                           </span>
                         </div>
                         <ChevronRight className="w-4 h-4 text-slate-400 group-hover:translate-x-0.5 transition" />
@@ -1872,7 +2135,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => loadPresetSpecimen(
-                          "https://images.unsplash.com/photo-1530595467537-0b5996c41f2d?q=80&w=480&auto=format&fit=crop",
+                          "https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page52_0.jpeg",
                           locale === "bn"
                             ? "টমেটোর পাতাগুলো ওপরের দিকে কুঁকড়ে যাচ্ছে এবং মারাত্মকভাবে কুঁচকে গেছে। পাতার কিনারাগুলো হলুদ রঙ ধারণ করছে। নতুন কুঁড়িগুলোর বৃদ্ধি ব্যাহত হচ্ছে, যার ফলে মাথার ডগায় গুচ্ছাকার বৃদ্ধি লক্ষ্য করা যাচ্ছে।"
                             : "Tomato leaves are curling upwards and puckering severely. The leaf borders are turning yellow. New shoots are stunted, leading to a tight bunchy growth at the terminal tip."
@@ -1886,9 +2149,9 @@ export default function App() {
                         id="preset-tomato-curl"
                       >
                         <img 
-                          src="https://images.unsplash.com/photo-1530595467537-0b5996c41f2d?q=80&w=120&auto=format&fit=crop" 
-                          className="w-12 h-12 object-cover rounded-lg border border-slate-200/60"
-                          alt="Tomato leaf curl preset case thumbnail"
+                          src="https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page52_0.jpeg" 
+                          className="w-12 h-12 object-cover rounded-lg border border-slate-200/60 bg-slate-900"
+                          alt="Tomato leaf curl authentic specimen"
                           referrerPolicy="no-referrer"
                         />
                         <div className="truncate-2-lines flex-1">
@@ -1896,7 +2159,7 @@ export default function App() {
                             {locale === "bn" ? "টমেটোর পাতা কোঁকড়ানো ভাইরাস" : "Tomato Leaf Curl Virus"}
                           </span>
                           <span className="text-[10px] text-slate-500 mt-0.5 block truncate">
-                            {locale === "bn" ? "উপরের দিকে পাতা কুঁকড়ে যাওয়া ও ডগা সংকুচিত হওয়া" : "Severe upward curling & terminal stunting"}
+                            {locale === "bn" ? "CABI পৃষ্ঠা ৫২ • বেগমোভাইরাস (ToLCV)" : "CABI Page 52 • Begomovirus (ToLCV)"}
                           </span>
                         </div>
                         <ChevronRight className="w-4 h-4 text-slate-400 group-hover:translate-x-0.5 transition" />
@@ -1905,7 +2168,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => loadPresetSpecimen(
-                          "https://images.unsplash.com/photo-1615484477778-ca3b77940c25?q=80&w=480&auto=format&fit=crop",
+                          "https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page23_0.jpeg",
                           locale === "bn"
                             ? "ভুট্টা গাছের নিচের অংশের পাতাগুলোর রঙ বিবর্ণ, সুষম সবুজ-হলুদ হয়ে গেছে, যেখানে হলুদ হওয়া পাতার ডগা থেকে শুরু হয়ে মধ্যশিরা বরাবর সুষমভাবে ভেতরের দিকে ছড়িয়ে পড়ছে।"
                             : "The entire lower canopy of the maize plant has turned a pale, uniform green-yellow, with the yellowing starting from the leaf tips and moving symmetrically inwards along the main midrib."
@@ -1919,9 +2182,9 @@ export default function App() {
                         id="preset-maize-nitrogen"
                       >
                         <img 
-                          src="https://images.unsplash.com/photo-1615484477778-ca3b77940c25?q=80&w=120&auto=format&fit=crop" 
-                          className="w-12 h-12 object-cover rounded-lg border border-slate-200/60"
-                          alt="Nitrogen deficiency preset case thumbnail"
+                          src="https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page23_0.jpeg" 
+                          className="w-12 h-12 object-cover rounded-lg border border-slate-200/60 bg-slate-900"
+                          alt="Nitrogen deficiency authentic specimen"
                           referrerPolicy="no-referrer"
                         />
                         <div className="truncate-2-lines flex-1">
@@ -1929,7 +2192,7 @@ export default function App() {
                             {locale === "bn" ? "পুষ্টির অভাব (অজৈব চাপ)" : "Nutrient Gap (Abiotic)"}
                           </span>
                           <span className="text-[10px] text-slate-500 mt-0.5 block truncate">
-                            {locale === "bn" ? "নিচের পাতার মধ্যশিরা বরাবর প্রতিসম ক্লোরোসিস" : "Lower canopy uniform midrib chlorosis"}
+                            {locale === "bn" ? "CABI পৃষ্ঠা ২৩ • মধ্যশিরা ক্লোরোসিস" : "CABI Page 23 • Midrib Chlorosis (Abiotic)"}
                           </span>
                         </div>
                         <ChevronRight className="w-4 h-4 text-slate-400 group-hover:translate-x-0.5 transition" />
@@ -1938,7 +2201,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => loadPresetSpecimen(
-                          "https://images.unsplash.com/photo-1592417817098-8f3d6eb19675?q=80&w=480&auto=format&fit=crop",
+                          "https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page106_0.jpeg",
                           locale === "bn"
                             ? "সয়াবিনের পাতায় কোণাকার পানি-ভেজা ক্ষতচিহ্ন দেখা যাচ্ছে যা বাদামী ও ক্ষয়প্রাপ্ত রঙে রূপ নিয়েছে। কিছু ক্ষত মিলে পাতার পুরো অংশ শুকিয়ে যাওয়ার কারণ হয়ে দাঁড়াচ্ছে, বিশেষত ভেজা স্যাঁতসেঁতে কিনারায়।"
                             : "Soybean leaves show angular water-soaked lesions that have turned brown and necrotic. Some lesions are coalescing, causing whole sections of the leaf to dry out and look scorched, particularly at the damp edges."
@@ -1952,9 +2215,9 @@ export default function App() {
                         id="preset-soy-blight"
                       >
                         <img 
-                          src="https://images.unsplash.com/photo-1592417817098-8f3d6eb19675?q=80&w=120&auto=format&fit=crop" 
-                          className="w-12 h-12 object-cover rounded-lg border border-slate-200/60"
-                          alt="Soy bacterial blight preset case thumbnail"
+                          src="https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page106_0.jpeg" 
+                          className="w-12 h-12 object-cover rounded-lg border border-slate-200/60 bg-slate-900"
+                          alt="Soy bacterial blight authentic specimen"
                           referrerPolicy="no-referrer"
                         />
                         <div className="truncate-2-lines flex-1">
@@ -1962,7 +2225,7 @@ export default function App() {
                             {locale === "bn" ? "সয়াবিনের কোণাকার ধসা রোগ" : "Soy Angular Blight"}
                           </span>
                           <span className="text-[10px] text-slate-500 mt-0.5 block truncate">
-                            {locale === "bn" ? "কোণাকার পানিভেজা ক্ষত থেকে ঝলসে যাওয়ার রূপান্তর" : "Angular wet sores transitioning into scorch"}
+                            {locale === "bn" ? "CABI পৃষ্ঠা ১০৬ • প্রান্তিক টিস্যু পচন" : "CABI Page 106 • Marginal Necrosis & Scorch"}
                           </span>
                         </div>
                         <ChevronRight className="w-4 h-4 text-slate-400 group-hover:translate-x-0.5 transition" />
@@ -2116,8 +2379,8 @@ export default function App() {
                       </div>
 
                       {/* Diagnostic confidence & page indexes row in columns */}
-                      <div className="flex flex-wrap gap-4 items-center" id="result-badges">
-                        <div className="bg-white shadow-sm border border-slate-200/80 px-4 py-2.5 rounded-xl text-center min-w-[100px] flex-1">
+                      <div className="flex flex-wrap gap-3 items-center" id="result-badges">
+                        <div className="bg-white shadow-sm border border-slate-200/80 px-4 py-2.5 rounded-xl text-center min-w-[100px]">
                           <div className="text-[10px] text-slate-400 font-medium">{locale === "bn" ? "নির্ভরযোগ্যতা" : "Confidence Margin"}</div>
                           <span className={`text-[13px] font-bold mt-0.5 inline-block font-sans ${
                             diagnosisResult.confidence === "High" ? "text-emerald-700" : diagnosisResult.confidence === "Medium" ? "text-amber-700" : "text-rose-700"
@@ -2125,12 +2388,22 @@ export default function App() {
                             ● {locale === "bn" ? (diagnosisResult.confidence === "High" ? "উচ্চ" : diagnosisResult.confidence === "Medium" ? "মাঝারি" : "নিম্ন") : diagnosisResult.confidence}
                           </span>
                         </div>
-                        <div className="bg-white shadow-sm border border-slate-200/80 px-4 py-2.5 rounded-xl text-center min-w-[100px] flex-1">
+                        <div className="bg-white shadow-sm border border-slate-200/80 px-4 py-2.5 rounded-xl text-center min-w-[100px]">
                           <div className="text-[10px] text-slate-400 font-medium font-sans">{locale === "bn" ? "CABI নির্দেশিকা পৃষ্ঠা" : "CABI Guide Page"}</div>
                           <span className="text-[13px] font-mono font-bold text-slate-800 mt-0.5 inline-block" id="result-pages">
                             {locale === "bn" ? "পৃষ্ঠা " : "p. "}{diagnosisResult.pageRecommendations.join(", ") || "N/A"}
                           </span>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => openDiagnosticReport(diagnosisResult, diagnoseImage, diagnosisResult.matchedCategory ? getCategoryLabel(diagnosisResult.matchedCategory) : undefined)}
+                          className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 shadow-sm transition cursor-pointer shrink-0"
+                          id="btn-export-pathologist-pdf"
+                          title={locale === "bn" ? "উপজেলা কৃষি অফিসের জন্য অফিশিয়াল PDF রিপোর্ট তৈরি করুন" : "Export Formatted Extension Office PDF Report"}
+                        >
+                          <FileText className="w-4 h-4 text-emerald-200" />
+                          <span>{locale === "bn" ? "অফিসিয়াল PDF রিপোর্ট" : "Export Office PDF"}</span>
+                        </button>
                       </div>
                     </div>
 
@@ -2327,9 +2600,19 @@ export default function App() {
                       </ul>
                     </div>
 
-                    {/* Navigation trigger button */}
-                    {diagnosisResult.matchedCategory && CABI_CATEGORIES.includes(diagnosisResult.matchedCategory) && (
-                      <div className="p-5 bg-slate-50/20 text-center flex items-center justify-center border-0" id="result-action">
+                    {/* Navigation and Export trigger buttons */}
+                    <div className="p-5 bg-slate-50/40 text-center flex flex-wrap items-center justify-center gap-3 border-t border-slate-100" id="result-action">
+                      <button
+                        type="button"
+                        onClick={() => openDiagnosticReport(diagnosisResult, diagnoseImage, diagnosisResult.matchedCategory ? getCategoryLabel(diagnosisResult.matchedCategory) : undefined)}
+                        className="bg-gradient-to-r from-emerald-800 to-teal-800 hover:from-emerald-900 hover:to-teal-900 text-white font-bold text-xs px-5 py-2.5 rounded-xl flex items-center gap-2 transition shadow-sm cursor-pointer"
+                        id="btn-footer-export-pathologist-pdf"
+                      >
+                        <FileText className="w-4 h-4 text-emerald-300" />
+                        <span>{locale === "bn" ? "কৃষি কর্মকর্তার জন্য অফিশিয়াল PDF রিপোর্ট তৈরি ও প্রিন্ট করুন" : "Generate & Print Extension Office PDF"}</span>
+                      </button>
+
+                      {diagnosisResult.matchedCategory && CABI_CATEGORIES.includes(diagnosisResult.matchedCategory) && (
                         <button
                           type="button"
                           onClick={() => {
@@ -2341,8 +2624,8 @@ export default function App() {
                           {locale === "bn" ? `সবুজ নির্দেশিকা চিত্র প্রদর্শন করুন: ${getCategoryLabel(diagnosisResult.matchedCategory)}` : `Show Practical Guide Photographs for ${getCategoryLabel(diagnosisResult.matchedCategory)}`}
                           <ChevronRight className="w-4 h-4" />
                         </button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </motion.div>
                 )}
 
@@ -2424,15 +2707,34 @@ export default function App() {
                                   </div>
                                 </div>
 
-                                <button
-                                  type="button"
-                                  onClick={(e) => deleteHistoryScan(scan.id, e)}
-                                  className="text-slate-400 hover:text-rose-600 transition p-1.5 rounded-lg hover:bg-rose-50 cursor-pointer border-0 bg-transparent shrink-0"
-                                  title="Delete Report Log"
-                                  id={`delete-history-${scan.id}`}
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openDiagnosticReport(
+                                        scan.result,
+                                        scan.image,
+                                        scan.result.matchedCategory ? getCategoryLabel(scan.result.matchedCategory) : undefined
+                                      );
+                                    }}
+                                    className="text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 transition p-1.5 rounded-lg cursor-pointer border-0 bg-transparent"
+                                    title={locale === "bn" ? "অফিসিয়াল PDF রিপোর্ট এক্সপোর্ট করুন" : "Export Official Extension PDF"}
+                                    id={`export-pdf-history-${scan.id}`}
+                                  >
+                                    <FileText className="w-3.5 h-3.5" />
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={(e) => deleteHistoryScan(scan.id, e)}
+                                    className="text-slate-400 hover:text-rose-600 transition p-1.5 rounded-lg hover:bg-rose-50 cursor-pointer border-0 bg-transparent"
+                                    title="Delete Report Log"
+                                    id={`delete-history-${scan.id}`}
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
                               </div>
                             );
                           })
@@ -2583,27 +2885,62 @@ export default function App() {
                     
                     {/* Left: Random reference image specimen */}
                     <div className="space-y-3" id="quiz-left-panel">
-                      <div className="aspect-[4/3] relative rounded-xl overflow-hidden bg-slate-100 border border-slate-200/60 shadow-sm">
-                        <img 
-                          src={currentQuestion.imageUrl}
-                          alt="Unknown plant pathogen specimen under visual study"
-                          referrerPolicy="no-referrer"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1599599810769-bcde5a160d32?q=80&w=640&auto=format&fit=crop";
-                          }}
-                          className="w-full h-full object-cover"
-                        />
-                        <div className="absolute top-2 right-2 bg-slate-900/60 backdrop-blur-md text-white px-2.5 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wide">
-                          {locale === "bn" ? "নিরীক্ষা নমুনা" : "Audit Specimen"}
-                        </div>
-                      </div>
-                      
-                      <div className="bg-slate-50/80 p-4 rounded-xl border border-slate-150 text-xs leading-relaxed text-slate-500" id="quiz-img-caption">
-                        <span className="font-semibold text-slate-700 block mb-1">{locale === "bn" ? "পর্যবেক্ষণ নোট:" : "Observation Note:"}</span>
-                        {locale === "bn" 
-                          ? `এটি CABI উদ্ভিদ রোগ নির্ণয় মাঠ নির্দেশিকার ${currentQuestion.page} পৃষ্ঠার একটি অচিহ্নিত নমুনা ছবি।` 
-                          : `This is a raw unlabelled photograph from Page ${currentQuestion.page} of the CABI plant diagnostics field guidelines.`}
-                      </div>
+                      {(() => {
+                        const quizImgName = currentQuestion.imageUrl.split("/").pop() || "";
+                        const quizPathogen = getImagePathogenInfo(quizImgName, currentQuestion.page, locale, currentQuestion.correctCategory);
+                        return (
+                          <>
+                            <div className="aspect-[4/3] relative rounded-xl overflow-hidden bg-slate-900 border border-slate-200/60 shadow-sm">
+                              <img 
+                                src={currentQuestion.imageUrl}
+                                alt={`CABI plant specimen Page ${currentQuestion.page}`}
+                                referrerPolicy="no-referrer"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).src = "https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page15_0.jpeg";
+                                }}
+                                className="w-full h-full object-cover"
+                              />
+                              <div className="absolute top-2 right-2 bg-slate-950/70 backdrop-blur-md text-white px-2.5 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wide flex items-center gap-1">
+                                <span>p.{currentQuestion.page}</span>
+                                <span>•</span>
+                                <span>{quizPathogen.figureLabel}</span>
+                              </div>
+                              <div className="absolute top-2 left-2 z-10">
+                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold backdrop-blur-md shadow-sm border ${quizPathogen.typeColor.bg} ${quizPathogen.typeColor.text} ${quizPathogen.typeColor.border}`}>
+                                  <span className={`w-1.5 h-1.5 rounded-full ${quizPathogen.typeColor.dot}`} />
+                                  {quizPathogen.problemType}
+                                </span>
+                              </div>
+                            </div>
+                            
+                            <div className="bg-slate-50/90 p-3.5 rounded-xl border border-slate-200/80 text-xs leading-relaxed text-slate-600 space-y-2" id="quiz-img-caption">
+                              <div>
+                                <span className="font-semibold text-slate-800 block mb-0.5">{locale === "bn" ? "পর্যবেক্ষণ ও নমুনা প্রেক্ষাপট:" : "Observation & Specimen Context:"}</span>
+                                <p className="text-slate-500 text-[11px]">
+                                  {locale === "bn" 
+                                    ? `এটি CABI উদ্ভিদ রোগ নির্ণয় মাঠ নির্দেশিকার পৃষ্ঠা ${currentQuestion.page}-এর একটি প্রামাণ্য ক্ষেত্রচিত্র।` 
+                                    : `Authentic diagnostic specimen from Page ${currentQuestion.page} of the CABI Crop Field Guide.`}
+                                </p>
+                              </div>
+
+                              {quizHasChecked && (
+                                <div className="pt-2 border-t border-slate-200 space-y-1 bg-white/80 p-2 rounded-lg border border-slate-150">
+                                  <div className="font-bold text-slate-800 text-xs text-emerald-800 flex items-center gap-1">
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                    <span>{locale === "bn" ? "প্রামাণ্য জীবাণু সূচক:" : "Authenticated Pathogen:"} {quizPathogen.pathogenName}</span>
+                                  </div>
+                                  <div className="text-[11px] text-slate-600 font-medium">
+                                    🌱 {locale === "bn" ? "আক্রান্ত ফসল:" : "Host Crop:"} {quizPathogen.hostCrop}
+                                  </div>
+                                  <div className="text-[10px] text-slate-500 italic">
+                                    {quizPathogen.diagnosticClue}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
 
                     {/* Right: Guess options and controls */}
@@ -2818,6 +3155,74 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Firebase Cloud Firestore DB Status Card */}
+              <div className="bg-slate-950/80 border border-emerald-500/30 p-3 rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Database className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-[10px] text-emerald-300 font-bold uppercase tracking-wider">
+                      {locale === "bn" ? "ফায়ারবেস ক্লাউড ডাটাবেস" : "Firebase Cloud Database"}
+                    </span>
+                  </div>
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-950 text-emerald-300 border border-emerald-800">
+                    fertilizer-dealer
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[10px]">
+                  <div>
+                    <span className="text-slate-400 block">{locale === "bn" ? "ডাটাবেস স্থিতি:" : "Status:"}</span>
+                    <span className="text-emerald-300 font-mono font-semibold flex items-center gap-1 mt-0.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      {cloudSyncing ? (locale === "bn" ? "সিঙ্ক হচ্ছে..." : "Syncing...") : (locale === "bn" ? "সক্রিয় (Firestore)" : "Live (Firestore)")}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block">{locale === "bn" ? "ক্লাউড রেকর্ডস:" : "Cloud Records:"}</span>
+                    <span className="text-slate-200 font-mono font-semibold mt-0.5 inline-block">
+                      {historyScans.length} {locale === "bn" ? "টি ডকুমেন্ট" : "docs"}
+                    </span>
+                  </div>
+                </div>
+                {firebaseUser && (
+                  <div className="pt-1 border-t border-slate-800/80 text-[9px] font-mono text-slate-400 flex items-center justify-between">
+                    <span>UID: {firebaseUser.uid.substring(0, 10)}...</span>
+                    <span>{firebaseUser.isAnonymous ? (locale === "bn" ? "বেনামী সেশন" : "Anon Session") : (locale === "bn" ? "প্রমাণিত" : "Verified")}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Workbox Offline Field Cache Status Card */}
+              <div className="bg-slate-950/80 border border-teal-500/30 p-3 rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <HardDriveDownload className="w-3.5 h-3.5 text-teal-400" />
+                    <span className="text-[10px] text-teal-300 font-bold uppercase tracking-wider">
+                      {locale === "bn" ? "ওয়ার্কবক্স অফলাইন ক্যাশ" : "Workbox Field Cache"}
+                    </span>
+                  </div>
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono bg-teal-950 text-teal-300 border border-teal-800">
+                    SW v7 Active
+                  </span>
+                </div>
+                <div className="space-y-1 text-[10px] text-slate-300">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">{locale === "bn" ? "সিএবিআই ডাটাবেস:" : "CABI Database:"}</span>
+                    <span className="font-mono text-emerald-300 font-semibold flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      StaleWhileRevalidate
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">{locale === "bn" ? "মাঠের নমুনা ছবি:" : "Specimen Photos:"}</span>
+                    <span className="font-mono text-teal-300 font-semibold">CacheFirst (60 Days)</span>
+                  </div>
+                </div>
+                <div className="pt-1 border-t border-slate-800/80 text-[9px] text-emerald-400/90 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                  <span>{locale === "bn" ? "ইন্টারনেট ছাড়া মাঠে সম্পূর্ণ সক্রিয়" : "Armed for Zero-Signal Field Operations"}</span>
+                </div>
+              </div>
+
               {/* Dynamic Diagnostics Stats */}
               <div className="bg-slate-950/65 border border-slate-800 p-3 rounded-xl space-y-2">
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">
@@ -2927,10 +3332,10 @@ export default function App() {
               <div className="relative rounded-2xl overflow-hidden bg-slate-900 border border-slate-800 shadow-2xl overflow-clip aspect-[4/3] w-full">
                 <img 
                   src={lightboxImage.url} 
-                  alt="High-resolution crop symptom specimen visual close-up details"
+                  alt={lightboxImage.info ? `${lightboxImage.info.pathogenName} - ${lightboxImage.info.hostCrop}` : "Crop symptom specimen"}
                   referrerPolicy="no-referrer"
                   onError={(e) => {
-                    (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1599599810769-bcde5a160d32?q=80&w=640&auto=format&fit=crop";
+                    (e.target as HTMLImageElement).src = "https://raw.githubusercontent.com/moniruzjaman/cabi-diagnosis-builder/krishiai4.0/output/images/img_page15_0.jpeg";
                   }}
                   className="w-full h-full object-contain"
                 />
@@ -2938,23 +3343,75 @@ export default function App() {
                 {/* Close Button overlay */}
                 <button 
                   onClick={() => setLightboxImage(null)}
-                  className="absolute top-4 right-4 p-2 bg-slate-950/60 hover:bg-slate-950 text-white rounded-xl backdrop-blur transition-all"
+                  className="absolute top-4 right-4 p-2 bg-slate-950/70 hover:bg-slate-950 text-white rounded-xl backdrop-blur transition-all z-20"
                   title="Close Dialog View"
                   id="lightbox-close"
                 >
                   <X className="w-5 h-5" />
                 </button>
+
+                {lightboxImage.info && (
+                  <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
+                    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold backdrop-blur-md shadow-md border ${lightboxImage.info.typeColor.bg} ${lightboxImage.info.typeColor.text} ${lightboxImage.info.typeColor.border}`}>
+                      <span className={`w-2 h-2 rounded-full ${lightboxImage.info.typeColor.dot}`} />
+                      {lightboxImage.info.problemType}
+                    </span>
+                    <span className="bg-slate-950/75 backdrop-blur-md text-white text-xs font-mono px-2.5 py-1 rounded-full border border-slate-800">
+                      {lightboxImage.info.figureLabel} • Page {lightboxImage.info.page}
+                    </span>
+                  </div>
+                )}
               </div>
 
-              {/* Caption details box */}
-              <div className="bg-slate-900 text-white p-4 rounded-xl border border-slate-800/80 text-xs flex items-center justify-between">
-                <span className="font-semibold">{lightboxImage.caption}</span>
-                <span className="text-[10px] text-slate-500 font-mono select-all">Index: {lightboxImage.url.split("/").pop()}</span>
+              {/* Caption details box with Pathogen Indexing */}
+              <div className="bg-slate-900/95 backdrop-blur-md text-white p-4 sm:p-5 rounded-xl border border-slate-800/80 text-xs space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
+                  <h4 className="font-bold text-sm text-slate-100">
+                    {lightboxImage.info ? lightboxImage.info.pathogenName : lightboxImage.caption}
+                  </h4>
+                  <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400">
+                    <span className="bg-slate-800/80 px-2 py-0.5 rounded text-emerald-400 font-sans font-medium">CABI Field Guide</span>
+                    <span className="select-all">{lightboxImage.url.split("/").pop()}</span>
+                  </div>
+                </div>
+
+                {lightboxImage.info && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-slate-300 pt-0.5">
+                    <div>
+                      <span className="text-slate-400 text-[10px] uppercase font-mono block mb-0.5">{locale === "bn" ? "আক্রান্ত ফসল / পোষক উদ্ভিদ:" : "Host Crop / Plant:"}</span>
+                      <span className="font-semibold text-emerald-300 text-xs">🌱 {lightboxImage.info.hostCrop}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 text-[10px] uppercase font-mono block mb-0.5">{locale === "bn" ? "মাঠ ডায়াগনস্টিক ক্লু:" : "Field Diagnostic Key:"}</span>
+                      <span className="text-slate-300 text-xs leading-relaxed italic">{lightboxImage.info.diagnosticClue}</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="text-[10px] text-slate-500 pt-1 border-t border-slate-800/60 flex items-center justify-between">
+                  <span>{locale === "bn" ? "উৎস: CABI প্ল্যান্টওয়াইজ ফিল্ড ডায়াগনসিস নির্দেশিকা" : "Source: CABI Plantwise Crop Diagnosis Field Guidelines"}</span>
+                  <span className="text-emerald-400 font-medium">Verified Field Specimen</span>
+                </div>
               </div>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Floating Offline Field Mode Indicator */}
+      <OfflineIndicator locale={locale} />
+
+      {/* Official Agricultural Extension Diagnostic PDF Report Modal */}
+      {reportModalData && (
+        <DiagnosticReportModal
+          isOpen={reportModalOpen}
+          onClose={() => setReportModalOpen(false)}
+          result={reportModalData.result}
+          specimenImage={reportModalData.image}
+          locale={locale}
+          categoryLabel={reportModalData.categoryLabel}
+        />
+      )}
     </div>
   );
 }

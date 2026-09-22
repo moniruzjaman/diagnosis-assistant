@@ -1,0 +1,43 @@
+{
+  "entities": {
+    "DiagnosticScan": {
+      "collection": "diagnostic_history",
+      "description": "User crop disease diagnoses, AI analysis results, and field scans",
+      "fields": {
+        "userId": { "type": "string", "description": "Owner user ID" },
+        "symptomDescription": { "type": "string", "description": "Reported crop symptom text" },
+        "cropType": { "type": "string", "description": "Target crop type or variety" },
+        "matchedCategory": { "type": "string", "description": "CABI visual symptom category" },
+        "pathogen": { "type": "string", "description": "Identified pathogen or physiological disorder" },
+        "confidence": { "type": "number", "description": "Diagnostic confidence score" },
+        "imageUrl": { "type": "string", "description": "Specimen photo reference URL" },
+        "resultData": { "type": "object", "description": "Complete diagnostic output JSON" },
+        "timestamp": { "type": "string", "description": "Display timestamp" },
+        "createdAt": { "type": "timestamp", "description": "Creation timestamp" }
+      }
+    },
+    "QuizScore": {
+      "collection": "quiz_scores",
+      "description": "User training quiz scores and progress",
+      "fields": {
+        "userId": { "type": "string", "description": "User identifier" },
+        "score": { "type": "number", "description": "Total correct answers" },
+        "played": { "type": "number", "description": "Total attempts" },
+        "lastUpdated": { "type": "timestamp", "description": "Last updated timestamp" }
+      }
+    },
+    "FieldReport": {
+      "collection": "field_reports",
+      "description": "Community farmer observations and verified field samples",
+      "fields": {
+        "userId": { "type": "string", "description": "Submitting user ID" },
+        "crop": { "type": "string", "description": "Crop name" },
+        "pathogen": { "type": "string", "description": "Pathogen or problem" },
+        "symptoms": { "type": "string", "description": "Observed symptom description" },
+        "imageUrl": { "type": "string", "description": "Field photo URL" },
+        "location": { "type": "string", "description": "District or field station" },
+        "createdAt": { "type": "timestamp", "description": "Submission timestamp" }
+      }
+    }
+  }
+}

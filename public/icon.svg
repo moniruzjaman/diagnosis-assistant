@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#064e3b" />
+      <stop offset="100%" stop-color="#022c22" />
+    </linearGradient>
+    <linearGradient id="leafGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#047857" stop-opacity="0.3" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.4" />
+    </filter>
+  </defs>
+  
+  <!-- Outer Rounded Shield / Frame -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)" />
+  <rect x="12" y="12" width="488" height="488" rx="100" fill="none" stroke="#10b981" stroke-width="4" stroke-opacity="0.3" />
+
+  <!-- Central Pulse Ring -->
+  <circle cx="256" cy="256" r="176" fill="none" stroke="url(#glow)" stroke-width="6" stroke-dasharray="16 12" />
+
+  <!-- Main Diagnostic Leaf Element -->
+  <g filter="url(#shadow)">
+    <!-- Primary Leaf Shape -->
+    <path d="M 256,96 C 360,110 400,210 390,320 C 350,370 290,400 256,416 C 222,400 162,370 122,320 C 112,210 152,110 256,96 Z" fill="url(#leafGrad)" />
+    
+    <!-- Leaf Center Stem -->
+    <path d="M 256,120 Q 256,260 256,400" stroke="#064e3b" stroke-width="8" stroke-linecap="round" fill="none" />
+    
+    <!-- Leaf Veins -->
+    <path d="M 256,200 Q 300,180 340,195" stroke="#064e3b" stroke-width="5" stroke-linecap="round" fill="none" />
+    <path d="M 256,240 Q 200,225 170,245" stroke="#064e3b" stroke-width="5" stroke-linecap="round" fill="none" />
+    <path d="M 256,285 Q 310,270 345,290" stroke="#064e3b" stroke-width="5" stroke-linecap="round" fill="none" />
+    <path d="M 256,330 Q 210,320 185,340" stroke="#064e3b" stroke-width="5" stroke-linecap="round" fill="none" />
+  </g>
+
+  <!-- Diagnostic Reticle Target -->
+  <circle cx="256" cy="256" r="64" fill="none" stroke="#ffffff" stroke-width="7" stroke-opacity="0.9" />
+  <circle cx="256" cy="256" r="14" fill="#34d399" />
+  <line x1="256" y1="172" x2="256" y2="192" stroke="#ffffff" stroke-width="6" stroke-linecap="round" />
+  <line x1="256" y1="320" x2="256" y2="340" stroke="#ffffff" stroke-width="6" stroke-linecap="round" />
+  <line x1="172" y1="256" x2="192" y2="256" stroke="#ffffff" stroke-width="6" stroke-linecap="round" />
+  <line x1="320" y1="256" x2="340" y2="256" stroke="#ffffff" stroke-width="6" stroke-linecap="round" />
+
+  <!-- Subtle CABI badge label at bottom -->
+  <rect x="186" y="432" width="140" height="34" rx="17" fill="#047857" />
+  <text x="256" y="454" fill="#ecfdf5" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="800" text-anchor="middle" letter-spacing="2">CABI PLANT</text>
+</svg>
