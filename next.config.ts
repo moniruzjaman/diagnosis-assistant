@@ -1,7 +1,18 @@
 import type { NextConfig } from "next";
 
+// The repo is deployed as a GitHub Pages project site, so the site is served
+// from https://<user>.github.io/diagnosis-assistant/. The basePath makes every
+// generated asset URL resolve under that prefix, and NEXT_PUBLIC_BASE_PATH
+// mirrors it to the client so fetch() calls to static assets resolve correctly.
+const basePath = "/diagnosis-assistant";
+
 const nextConfig: NextConfig = {
-  output: "standalone",
+  // Static HTML export — produces a self-contained ./out directory that
+  // GitHub Pages can serve directly with no Node.js runtime.
+  output: "export",
+  basePath,
+  // Trailing slashes keep asset resolution stable under the Pages basePath.
+  trailingSlash: true,
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -12,6 +23,8 @@ const nextConfig: NextConfig = {
     "localhost:3000",
   ],
   images: {
+    // GitHub Pages has no image optimization server; ship raw <img> URLs.
+    unoptimized: true,
     remotePatterns: [
       {
         protocol: "https",
@@ -19,6 +32,9 @@ const nextConfig: NextConfig = {
         pathname: "/**",
       },
     ],
+  },
+  env: {
+    NEXT_PUBLIC_BASE_PATH: basePath,
   },
 };
 

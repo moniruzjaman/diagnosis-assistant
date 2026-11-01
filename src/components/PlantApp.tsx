@@ -45,6 +45,8 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { DatabaseSchema, DiagnosticKey, AIDiagnosisResult, QuizQuestion, HistoryScan } from "@/lib/types";
 import { TRANSLATIONS, BANGLA_CATEGORIES, BANGLA_PAGE_PREVIEWS } from "@/lib/translations";
+import { loadDatabase } from "@/lib/staticDatabase";
+import { diagnoseViaApiOrHeuristic } from "@/lib/staticDiagnose";
 import { getImagePathogenInfo, ImagePathogenInfo } from "@/data/imageLabels";
 import { PWAInstallButton } from "@/components/pwa/PWAInstallButton";
 import { OfflineIndicator } from "@/components/pwa/OfflineIndicator";
@@ -534,11 +536,10 @@ export default function App() {
     async function loadDb() {
       try {
         setLoading(true);
-        const response = await fetch("/api/database", { signal: controller.signal });
-        if (!response.ok) {
-          throw new Error("Diagnosis database lookup returned non-ok stream.");
-        }
-        const data = await response.json();
+        // On GitHub Pages the database is served as a static JSON file;
+        // loadDatabase() handles the static URL, a dev-only /api/database
+        // fallback, and an offline fallback in that order.
+        const data = await loadDatabase();
         setDb(data);
         generateQuizQuestion(data);
       } catch (err: any) {
@@ -642,22 +643,19 @@ export default function App() {
     }
   };
 
-  // Initiate Server-Side AI Pathology Diagnosis
+  // Initiate AI Pathology Diagnosis — uses the server route when available
+  // (local dev) and a deterministic client-side heuristic on static deploys.
   const handleSmartDiagnosis = async () => {
     if (!symptomDescription.trim()) return;
     try {
       setDiagnosing(true);
       setDiagnosisResult(null);
       setAiErrorMsg(null);
-      const response = await fetch("/api/diagnose", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symptomDescription, image: diagnoseImage, locale })
+      const data = await diagnoseViaApiOrHeuristic({
+        symptomDescription,
+        image: diagnoseImage,
+        locale,
       });
-      if (!response.ok) {
-        throw new Error("AI diagnostic processor returned failure.");
-      }
-      const data = await response.json();
       setDiagnosisResult(data);
       appendHistoryScan(symptomDescription, diagnoseImage, data);
     } catch (err: any) {
@@ -691,33 +689,23 @@ export default function App() {
     const startTimeStamp = Date.now();
     try {
       const fullSymptomText = `[Guided Step Analysis] Crop Specimen: ${wizardCropType || "Crop of Interest"}. Observed Physical Traits: ${wizardSymptomText || "Delineated leaf spots or physical necrosis"}`;
-      const response = await fetch("/api/diagnose", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symptomDescription: fullSymptomText,
-          image: wizardImage,
-          locale
-        })
+      const payload = await diagnoseViaApiOrHeuristic({
+        symptomDescription: fullSymptomText,
+        image: wizardImage,
+        locale,
       });
-      
-      if (!response.ok) {
-        throw new Error("Host analysis service returned an error status.");
-      }
-      
-      const payload = await response.json();
-      
+
       // Ensure the gorgeous transition laser scanner is visible for at least 4.2 seconds
       const lapsed = Date.now() - startTimeStamp;
       const remains = Math.max(0, 4200 - lapsed);
-      
+
       window.setTimeout(() => {
         setWizardResult(payload);
         // Save scan log to general audit history
         appendHistoryScan(`${wizardCropType ? "[" + wizardCropType + "] " : ""}${wizardSymptomText}`, wizardImage, payload);
         setWizardStep(4);
       }, remains);
-      
+
     } catch (err: any) {
       console.error(err);
       setWizardErrorMsg(err.message || "Failed to finalize guided diagnostics.");
