@@ -40,13 +40,20 @@ import {
   Wifi,
   WifiOff,
   FileText,
-  Printer
+  Printer,
+  Settings,
+  KeyRound
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { DatabaseSchema, DiagnosticKey, AIDiagnosisResult, QuizQuestion, HistoryScan } from "@/lib/types";
 import { TRANSLATIONS, BANGLA_CATEGORIES, BANGLA_PAGE_PREVIEWS } from "@/lib/translations";
 import { loadDatabase } from "@/lib/staticDatabase";
 import { diagnoseViaApiOrHeuristic } from "@/lib/staticDiagnose";
+import {
+  loadAiConfig,
+  saveAiConfig,
+  PROVIDER_PRESETS,
+} from "@/lib/freeAiDiagnose";
 import { getImagePathogenInfo, ImagePathogenInfo } from "@/data/imageLabels";
 import { PWAInstallButton } from "@/components/pwa/PWAInstallButton";
 import { OfflineIndicator } from "@/components/pwa/OfflineIndicator";
@@ -296,7 +303,57 @@ export default function App() {
   const [db, setDb] = useState<DatabaseSchema | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  
+
+  // AI Engine Settings — bring-your-own-key (stored in localStorage only).
+  // When no key is configured the app falls back to the built-in heuristic.
+  // Initialised lazily from localStorage so there is no mount-time setState.
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
+  const [aiProvider, setAiProvider] = useState<string>(() => {
+    const cfg = loadAiConfig();
+    if (!cfg) return "openrouter";
+    const match = Object.entries(PROVIDER_PRESETS).find(
+      ([, p]) => p.endpoint === cfg.endpoint
+    );
+    return match ? match[0] : "custom";
+  });
+  const [aiApiKey, setAiApiKey] = useState<string>(() => loadAiConfig()?.apiKey ?? "");
+  const [aiModel, setAiModel] = useState<string>(
+    () => loadAiConfig()?.model ?? PROVIDER_PRESETS.openrouter.model
+  );
+  const [aiEndpoint, setAiEndpoint] = useState<string>(
+    () => loadAiConfig()?.endpoint ?? PROVIDER_PRESETS.openrouter.endpoint
+  );
+  const [aiEnabled, setAiEnabled] = useState<boolean>(() => !!loadAiConfig());
+
+  const handleProviderChange = (key: string) => {
+    setAiProvider(key);
+    const preset = PROVIDER_PRESETS[key];
+    if (preset && preset.endpoint) {
+      setAiEndpoint(preset.endpoint);
+      setAiModel(preset.model);
+    }
+  };
+
+  const handleSaveAiConfig = () => {
+    const trimmedKey = aiApiKey.trim();
+    const trimmedEndpoint = aiEndpoint.trim();
+    const trimmedModel = aiModel.trim();
+    if (!trimmedKey || !trimmedEndpoint || !trimmedModel) return;
+    saveAiConfig({ apiKey: trimmedKey, endpoint: trimmedEndpoint, model: trimmedModel });
+    setAiEnabled(true);
+    setAiSettingsOpen(false);
+  };
+
+  const handleClearAiConfig = () => {
+    saveAiConfig(null);
+    setAiApiKey("");
+    setAiEnabled(false);
+    const preset = PROVIDER_PRESETS[aiProvider] || PROVIDER_PRESETS.openrouter;
+    setAiEndpoint(preset.endpoint);
+    setAiModel(preset.model);
+  };
+
+
   // Browsing States
   const [activeTab, setActiveTab] = useState<"explorer" | "wizard" | "pathologist" | "quiz">("wizard");
   const [searchTerm, setSearchTerm] = useState("");
@@ -684,7 +741,7 @@ export default function App() {
     const stepTimers: number[] = [];
     stepTimers.push(window.setTimeout(() => setWizardProgressMessage(t.diagnoseProgressFocal), 1200));
     stepTimers.push(window.setTimeout(() => setWizardProgressMessage(t.diagnoseProgressCabi), 2500));
-    stepTimers.push(window.setTimeout(() => setWizardProgressMessage(t.diagnoseProgressGemini), 3800));
+    stepTimers.push(window.setTimeout(() => setWizardProgressMessage(t.diagnoseProgressAi), 3800));
     
     const startTimeStamp = Date.now();
     try {
@@ -782,6 +839,23 @@ export default function App() {
                 {locale === "en" && <span className="w-1.5 h-1.5 bg-emerald-305 rounded-full animate-pulse"></span>}
               </button>
             </div>
+
+            {/* AI Engine settings — gear button with live status dot */}
+            <button
+              type="button"
+              onClick={() => setAiSettingsOpen(true)}
+              className="relative p-2 rounded-xl border border-white/10 bg-black/25 text-emerald-100 hover:text-white hover:bg-emerald-900/40 transition-all cursor-pointer"
+              title={aiEnabled ? (locale === "bn" ? "এআই ইঞ্জিন সক্রিয় — সেটিংস" : "AI engine enabled — settings") : (locale === "bn" ? "অফলাইন মোড — এআই কী যোগ করুন" : "Offline mode — add an AI key")}
+              id="ai-settings-btn"
+              aria-label="AI engine settings"
+            >
+              <Settings className="w-4 h-4" />
+              <span
+                className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border border-slate-900 ${
+                  aiEnabled ? "bg-emerald-400 animate-pulse" : "bg-amber-400"
+                }`}
+              />
+            </button>
 
             {/* Main Tab Controls with elegant active states */}
             <nav className="flex bg-emerald-950/40 p-1 rounded-xl border border-emerald-700/30 backdrop-blur-sm shadow-inner" id="nav-tabs">
@@ -3057,7 +3131,7 @@ export default function App() {
       <footer className="bg-slate-900 text-slate-500 text-center py-6 text-xs border-t border-slate-800/80" id="footer">
         <p className="max-w-7xl mx-auto px-4 leading-relaxed font-sans" id="footer-text">
           Digital Diagnosis Builder © 2026. Inspired by the public CABI Plantwise Field Diagnostic Guidelines compiled by Phil Taylor. 
-          Powered by Express, React and Gemini Neural Pathologists.
+          Powered by React and the free Pollinations AI pathology model.
         </p>
       </footer>
 
@@ -3379,6 +3453,148 @@ export default function App() {
                 <div className="text-[10px] text-slate-500 pt-1 border-t border-slate-800/60 flex items-center justify-between">
                   <span>{locale === "bn" ? "উৎস: CABI প্ল্যান্টওয়াইজ ফিল্ড ডায়াগনসিস নির্দেশিকা" : "Source: CABI Plantwise Crop Diagnosis Field Guidelines"}</span>
                   <span className="text-emerald-400 font-medium">Verified Field Specimen</span>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* AI Engine Settings modal — bring-your-own-key */}
+      <AnimatePresence>
+        {aiSettingsOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 z-50"
+            onClick={() => setAiSettingsOpen(false)}
+            id="ai-settings-backdrop"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="relative w-full max-w-lg bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+              id="ai-settings-card"
+            >
+              <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+                <div className="flex items-center gap-2.5">
+                  <Settings className="w-5 h-5 text-emerald-400" />
+                  <h2 className="text-base font-semibold text-slate-100">
+                    {locale === "bn" ? "এআই ইঞ্জিন সেটিংস" : "AI Engine Settings"}
+                  </h2>
+                </div>
+                <button
+                  onClick={() => setAiSettingsOpen(false)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-all cursor-pointer"
+                  aria-label="Close"
+                  id="ai-settings-close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="px-5 py-4 space-y-4 max-h-[70vh] overflow-y-auto">
+                <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium ${aiEnabled ? "bg-emerald-900/40 text-emerald-300 border border-emerald-700/40" : "bg-amber-900/30 text-amber-300 border border-amber-700/40"}`}>
+                  <span className={`w-2 h-2 rounded-full ${aiEnabled ? "bg-emerald-400" : "bg-amber-400"}`} />
+                  {aiEnabled
+                    ? (locale === "bn" ? "লাইভ এআই সক্রিয় — নির্ণয় আপনার কী ব্যবহার করে।" : "Live AI enabled — diagnosis uses your key.")
+                    : (locale === "bn" ? "অফলাইন মোড — বিল্ট-ইন বিশেষজ্ঞ সিস্টেম ব্যবহৃত হচ্ছে। লাইভ এআই-এর জন্য একটি ফ্রি কী যোগ করুন।" : "Offline mode — using the built-in expert system. Add a free key for live AI.")}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1.5">{locale === "bn" ? "প্রোভাইডার" : "Provider"}</label>
+                  <select
+                    value={aiProvider}
+                    onChange={(e) => handleProviderChange(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 focus:outline-none focus:border-emerald-500 cursor-pointer"
+                    id="ai-provider-select"
+                  >
+                    {Object.entries(PROVIDER_PRESETS).map(([key, p]) => (
+                      <option key={key} value={key}>{p.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1.5">{locale === "bn" ? "এপিআই কী (API Key)" : "API Key"}</label>
+                  <div className="relative">
+                    <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                    <input
+                      type="password"
+                      value={aiApiKey}
+                      onChange={(e) => setAiApiKey(e.target.value)}
+                      placeholder="sk-or-v1-..."
+                      className="w-full pl-9 pr-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 font-mono focus:outline-none focus:border-emerald-500"
+                      autoComplete="off"
+                      spellCheck={false}
+                      id="ai-key-input"
+                    />
+                  </div>
+                  {PROVIDER_PRESETS[aiProvider]?.keyUrl && (
+                    <a href={PROVIDER_PRESETS[aiProvider].keyUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 mt-1.5 text-xs text-emerald-400 hover:text-emerald-300">
+                      {locale === "bn" ? "ফ্রি কী নিন" : "Get a free key"} <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1.5">{locale === "bn" ? "মডেল" : "Model"}</label>
+                  <input
+                    type="text"
+                    value={aiModel}
+                    onChange={(e) => setAiModel(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 font-mono focus:outline-none focus:border-emerald-500"
+                    spellCheck={false}
+                    id="ai-model-input"
+                  />
+                </div>
+
+                {aiProvider === "custom" && (
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1.5">{locale === "bn" ? "এন্ডপয়েন্ট" : "Endpoint"}</label>
+                    <input
+                      type="text"
+                      value={aiEndpoint}
+                      onChange={(e) => setAiEndpoint(e.target.value)}
+                      placeholder="https://..."
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 font-mono focus:outline-none focus:border-emerald-500"
+                      spellCheck={false}
+                      id="ai-endpoint-input"
+                    />
+                  </div>
+                )}
+
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  {locale === "bn"
+                    ? "আপনার কী শুধু এই ব্রাউজারে localStorage-এ সংরক্ষিত হয় এবং কখনো সার্ভারে পাঠানো হয় না। OpenRouter-এর ফ্রি মডেল (`:free` প্রত্যয়যুক্ত) $0 ব্যালেন্সেও কাজ করে।"
+                    : "Your key is stored only in this browser's localStorage and never sent to any server. OpenRouter free models (ids ending in `:free`) work even with a $0 balance."}
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 px-5 py-4 border-t border-slate-800 bg-slate-900/60">
+                <button
+                  onClick={handleClearAiConfig}
+                  disabled={!aiEnabled}
+                  className="px-3 py-2 text-xs font-medium text-rose-300 hover:text-rose-200 border border-rose-800/50 hover:border-rose-700 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  id="ai-clear-btn"
+                >
+                  {locale === "bn" ? "কী মুছুন" : "Clear key"}
+                </button>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setAiSettingsOpen(false)} className="px-4 py-2 text-xs font-medium text-slate-300 hover:text-white border border-slate-700 rounded-lg transition-all cursor-pointer" id="ai-cancel-btn">
+                    {locale === "bn" ? "বাতিল" : "Cancel"}
+                  </button>
+                  <button
+                    onClick={handleSaveAiConfig}
+                    disabled={!aiApiKey.trim() || !aiModel.trim() || !aiEndpoint.trim()}
+                    className="px-4 py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    id="ai-save-btn"
+                  >
+                    {locale === "bn" ? "সংরক্ষণ করুন" : "Save"}
+                  </button>
                 </div>
               </div>
             </motion.div>

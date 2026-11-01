@@ -4,7 +4,7 @@ An interactive, AI-powered digital guide to identify crop diseases and pests usi
 
 Built with **Next.js 16 + TypeScript + Tailwind CSS 4 + shadcn/ui**, and powered by **GLM-4.5V** (multimodal vision) and **GLM-4.6** (text) via the `z-ai-web-dev-sdk` — no API key required by the user (bypass SDK).
 
-![CABI AI Doctor Diagnosis Screenshot](download/cabi-ai-doctor-diagnosis.png)
+![CABI AI Doctor Diagnosis Screenshot](download/cabi-byok-settings.png)
 
 ## Features
 
@@ -76,17 +76,32 @@ public/
 
 ## How the AI Diagnosis Works
 
-1. User describes symptoms in Bangla or English, optionally attaches a leaf photo.
-2. Backend builds a clinical pathology prompt based on the CABI Plantwise framework:
-   - Match the symptom to one of 10 CABI visual categories
-   - Classify as Biotic vs Abiotic based on lesion boundaries vs gradients
-   - Distinguish **Signs** (pathogen evidence like fruiting bodies, sporulation, frass) from **Symptoms** (plant reactions like wilt, chlorosis, distortion)
-   - Evaluate organic management options against the **Big 5** framework
-3. For image inputs, the prompt + base64 image is sent to GLM-4.5V via `createVision()`.
-4. For text-only inputs, the prompt is sent to GLM-4.6 via `create()`.
-5. Both calls enable `thinking` mode for chain-of-thought reasoning.
-6. Response is parsed as strict JSON matching the `AIDiagnosisResult` schema.
-7. A heuristic offline fallback handles failures with keyword-based matching.
+The app runs entirely in the browser (no server) and uses a **bring-your-own-key** model so it can deploy as a static site on GitHub Pages with no secrets in the repo.
+
+### Resolution order (see `src/lib/staticDiagnose.ts`)
+
+1. **Live AI (if a key is configured)** — `src/lib/freeAiDiagnose.ts` calls any OpenAI-compatible chat API using the key the user pasted into the in-app settings panel. The default provider is **OpenRouter**, which offers genuinely free models (ids ending in `:free` work even with a $0 balance). The call uses `response_format: json_object` to force structured output.
+2. **Heuristic fallback (always available)** — `diagnoseSymptoms()` is a deterministic keyword-matching expert system that maps the symptom text to one of the 10 CABI categories and produces the full structured result. It runs whenever no key is set or the live call fails, so the app never leaves the user without a diagnosis.
+
+### The clinical pathology prompt
+
+Both paths build the same CABI Plantwise-structured prompt and parse the response into `AIDiagnosisResult`:
+
+- Match the symptom to one of **10 CABI visual categories** (Wilt, Leaf spot, Witches' broom, Canker, Mosaic, Yellowing, Distortion, Little leaf, Galls, Drying/necrosis/blight)
+- Classify as **Biotic vs Abiotic** (lesion boundaries vs gradients)
+- Distinguish **Signs** (pathogen evidence: fruiting bodies, sporulation, frass) from **Symptoms** (plant reactions: wilt, chlorosis, distortion)
+- Evaluate organic management against the **CABI Big 5** framework (Economic, Effective, Safe, Practical, Locally Available)
+
+### Enabling live AI (one-time, free)
+
+1. Click the **gear icon** (⚙) in the header — the dot is amber while offline, green when AI is enabled.
+2. Sign up at **[openrouter.ai/keys](https://openrouter.ai/keys)** and create a free key (no credit card needed).
+3. Paste the key into the **API Key** field. The provider and free model (`meta-llama/llama-3.2-3b-instruct:free`) are pre-filled.
+4. Click **Save**. The key is stored only in this browser's `localStorage` — it is never sent to any server other than the AI provider, and never committed to the repo.
+
+The diagnosis then runs against the live model. Clear the key any time from the same panel to return to the offline heuristic.
+
+> **Why bring-your-own-key?** Truly key-less browser AI endpoints now all gate access: Pollinations requires a Cloudflare Turnstile token, Groq blocks CORS, and Puter.js requires a login. OpenRouter is the one free-tier provider that sends permissive CORS headers, so it is the only one callable directly from a static site. The trade-off is one key the user supplies themselves.
 
 ## License
 
@@ -96,4 +111,4 @@ This project is based on the CABI Plantwise Field Diagnostic Guide methodology. 
 
 - **CABI Plantwise** for the Field Diagnostic Guide methodology
 - **Phil Taylor** — compiler of the original Plantwise Diagnostic Field Guide
-- Built with the Z.ai developer SDK
+- **OpenRouter** for free-model access that makes browser-side AI possible on a static site

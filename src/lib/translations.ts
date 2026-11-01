@@ -129,7 +129,7 @@ export const TRANSLATIONS = {
     diagnoseProgressScan: "ফোলিয়ার টিস্যু মাইক্রোস্কোপিক স্ক্যান প্রক্রিয়া চলছে...",
     diagnoseProgressFocal: "রোগাক্রান্ত স্থানে নেক্রোটিক দাগ এবং ইনফেকশন জোন খোঁজা হচ্ছে...",
     diagnoseProgressCabi: "CABI প্ল্যান্টওয়াইজ নির্দেশিকা রেফারেন্সের সাথে মেলানো হচ্ছে...",
-    diagnoseProgressGemini: "কৃষি প্যাথলজি জেমিনি এআই লাইভ ভেক্টর বিন্যাস করা হচ্ছে...",
+    diagnoseProgressAi: "কৃষি প্যাথলজি এআই লাইভ ভেক্টর বিন্যাস করা হচ্ছে...",
     resetWizard: "নতুন করে শুরু করুন",
     selectOrUpload: "ছবি ড্র্যাগ করুন অথবা নিচে তৈরি নমুনা থেকে ক্লিক করুন"
   },
@@ -169,7 +169,7 @@ export const TRANSLATIONS = {
     // AI doctor
     multimodalEngine: "Multimodal Diagnostic Engine",
     aiDoctorTitle: "AI Crop Diagnostic Pathologist",
-    aiDoctorDesc: "Upload specimen photos or explain symptoms to query our Gemini Pathology model. The engine validates findings against CABI Plantwise guidelines, categorizing biotic vs abiotic pathways, visual signs vs reactions, and checking parameters against the CABI \"Big 5\" framework.",
+    aiDoctorDesc: "Upload specimen photos or explain symptoms to query our AI Pathology model. The engine validates findings against CABI Plantwise guidelines, categorizing biotic vs abiotic pathways, visual signs vs reactions, and checking parameters against the CABI \"Big 5\" framework.",
     readyRecognizeCases: "Ready-to-Recognize Specimen cases",
     exploreSamplesTab: "Explore Samples",
     selectStandardCase: "Select a standard plant disease case to instantly pre-load high-resolution specimen photos and descriptions into the analyzer tray.",
@@ -263,7 +263,7 @@ export const TRANSLATIONS = {
     diagnoseProgressScan: "Analyzing foliage cellular tissue structures...",
     diagnoseProgressFocal: "Identifying focal necrotic centers and chlorotic halo borders...",
     diagnoseProgressCabi: "Matching symptoms against CABI Plantwise Guideline tables...",
-    diagnoseProgressGemini: "Executing multi-modal AI clinical pest evaluation...",
+    diagnoseProgressAi: "Executing multi-modal AI clinical pest evaluation...",
     resetWizard: "Restart New Diagnosis",
     selectOrUpload: "Drag leaf image or click one of the ready specimen cases below"
   }

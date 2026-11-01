@@ -8,6 +8,7 @@
 // Bangla or English. It is deterministic and works fully offline.
 
 import { AIDiagnosisResult } from "./types";
+import { diagnoseViaFreeAi } from "./freeAiDiagnose";
 
 type Locale = "bn" | "en";
 
@@ -80,14 +81,25 @@ function defaultBlocks(locale: Locale) {
 // Keyword → CABI category mapping with full localized payloads.
 // Bangla keyword fragments are matched alongside English ones so the
 // heuristic works for farmers typing in either language.
-// Attempts the dev-only /api/diagnose route first (when running with the
-// Next.js server), then falls back to the deterministic client-side
-// heuristic. This keeps the AI-powered diagnosis when developing locally
-// while still working fully on a static GitHub Pages export.
+//
+// Diagnosis resolution order:
+//   1. Free Pollinations AI (browser-callable, no key, works on static Pages)
+//   2. Dev-only /api/diagnose route (when running locally with the Next server)
+//   3. Deterministic client-side heuristic (offline fallback)
+// The heuristic is always available, so the app never fails to produce a
+// structured result even if the network or AI service is unavailable.
 export async function diagnoseViaApiOrHeuristic(
   input: DiagnoseInput
 ): Promise<AIDiagnosisResult> {
   const { symptomDescription, image, locale } = input;
+
+  // 1. Free Pollinations AI — primary path on the published static site.
+  const aiResult = await diagnoseViaFreeAi({ symptomDescription, image, locale });
+  if (aiResult) {
+    return aiResult;
+  }
+
+  // 2. Dev-only server route (absent on a static export).
   try {
     const res = await fetch("/api/diagnose", {
       method: "POST",
@@ -103,6 +115,8 @@ export async function diagnoseViaApiOrHeuristic(
   } catch {
     // static export — route absent; fall through to heuristic
   }
+
+  // 3. Deterministic heuristic fallback.
   return diagnoseSymptoms(input);
 }
 
