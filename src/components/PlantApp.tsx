@@ -296,6 +296,12 @@ export default function App() {
   const [locale, setLocale] = useState<"bn" | "en">("bn");
   const t = TRANSLATIONS[locale];
 
+  // Bangla-first: keep the document language in step with the UI locale so
+  // screen readers and translation tooling see the right language.
+  useEffect(() => {
+    document.documentElement.lang = locale === "bn" ? "bn" : "en";
+  }, [locale]);
+
   const getCategoryLabel = (cat: string) => {
     return locale === "bn" ? (BANGLA_CATEGORIES[cat] || cat) : cat;
   };

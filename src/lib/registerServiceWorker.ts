@@ -17,7 +17,10 @@ export function registerCabiServiceWorker(onUpdateFound?: () => void) {
   if (wbInstance) return wbInstance;
 
   try {
-    const wb = new Workbox("/sw.js");
+    // Honour the GitHub Pages basePath (/diagnosis-assistant) so the worker
+    // URL resolves on the project site; empty string in plain-root deploys.
+    const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+    const wb = new Workbox(`${basePath}/sw.js`);
     wbInstance = wb;
 
     wb.addEventListener("installed", (event) => {

@@ -15,6 +15,17 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// GitHub Pages project site prefix — mirrors next.config.ts so every
+// metadata URL (icons, OG image, canonical) resolves on the deployed site.
+const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "";
+const SITE_URL = "https://moniruzjaman.github.io";
+
+const OG_TITLE = "CABI ফসল রোগ নিরূপক ও সহকারী";
+const OG_DESCRIPTION =
+  "CABI Plantwise মাঠপর্যায়ের গাইড অনুসরণ করে ছবি ও লক্ষণ দেখে ফসলের রোগ শনাক্তকরণ — AI-powered crop disease diagnosis in Bangla & English, offline-ready PWA.";
+const OG_IMAGE_ALT =
+  "CABI Plant Diagnosis Assistant — বাংলা-প্রথম অফলাইন PWA, ফসলের রোগ নির্ণয় অ্যাপ / Bangla-first offline PWA for AI crop disease diagnosis";
+
 export const viewport: Viewport = {
   themeColor: "#059669",
   width: "device-width",
@@ -23,10 +34,10 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "CABI Plant Diagnosis Assistant",
+  metadataBase: new URL(SITE_URL),
+  title: `${OG_TITLE} | CABI Plant Diagnosis Assistant`,
   description:
     "An interactive digital guide to identify crop diseases and pests using visual symptom categories from the CABI Plantwise Field Diagnostic Guide. AI-powered multimodal diagnosis in Bangla and English.",
-  manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
@@ -34,12 +45,12 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: [
-      { url: "/icon.svg", type: "image/svg+xml" },
-      { url: "/favicon.ico", sizes: "32x32" },
-      { url: "/pwa-192x192.png", sizes: "192x192", type: "image/png" },
-      { url: "/pwa-512x512.png", sizes: "512x512", type: "image/png" },
+      { url: `${BASE}/icon.svg`, type: "image/svg+xml" },
+      { url: `${BASE}/favicon.ico`, sizes: "32x32" },
+      { url: `${BASE}/pwa-192x192.png`, sizes: "192x192", type: "image/png" },
+      { url: `${BASE}/pwa-512x512.png`, sizes: "512x512", type: "image/png" },
     ],
-    apple: "/apple-touch-icon.png",
+    apple: `${BASE}/apple-touch-icon.png`,
   },
   keywords: [
     "CABI",
@@ -53,11 +64,31 @@ export const metadata: Metadata = {
     "offline agriculture",
   ],
   authors: [{ name: "CABI Plantwise" }],
+  alternates: {
+    canonical: `${BASE}/`,
+  },
   openGraph: {
-    title: "CABI Plant Diagnosis Assistant",
-    description:
-      "Identify crop diseases and pests using visual symptom categories from the CABI Plantwise Field Diagnostic Guide. Built for offline agricultural field conditions.",
+    title: OG_TITLE,
+    description: OG_DESCRIPTION,
+    url: `${BASE}/`,
+    siteName: "CABI Plant Diagnosis Assistant",
     type: "website",
+    locale: "bn_BD",
+    alternateLocale: ["en_US"],
+    images: [
+      {
+        url: `${BASE}/og-image.png`,
+        width: 1200,
+        height: 630,
+        alt: OG_IMAGE_ALT,
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: OG_TITLE,
+    description: OG_DESCRIPTION,
+    images: [`${BASE}/og-image.png`],
   },
 };
 
@@ -67,7 +98,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="bn" suppressHydrationWarning>
       <head>
         <Script
           id="fetch-override-protect"

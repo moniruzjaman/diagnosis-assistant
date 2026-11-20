@@ -1,22 +1,27 @@
 // CABI Plant Diagnosis Assistant - Workbox Service Worker for Offline Field Conditions
 /* global workbox */
 
+// Derive the deploy base path from the worker's registration scope so every
+// path below resolves both at site root and under a GitHub Pages project
+// sub-path (e.g. /diagnosis-assistant/).
+const BASE = new URL(self.registration.scope).pathname.replace(/\/$/, '');
+
 try {
   // Load self-hosted Workbox modules explicitly
-  importScripts('/workbox/workbox-sw.js');
+  importScripts(BASE + '/workbox/workbox-sw.js');
   if (typeof workbox !== 'undefined') {
     workbox.setConfig({
-      modulePathPrefix: '/workbox',
+      modulePathPrefix: BASE + '/workbox',
       debug: false,
     });
     // Explicitly preload essential modules from local files
     importScripts(
-      '/workbox/workbox-core.prod.js',
-      '/workbox/workbox-routing.prod.js',
-      '/workbox/workbox-strategies.prod.js',
-      '/workbox/workbox-expiration.prod.js',
-      '/workbox/workbox-cacheable-response.prod.js',
-      '/workbox/workbox-precaching.prod.js'
+      BASE + '/workbox/workbox-core.prod.js',
+      BASE + '/workbox/workbox-routing.prod.js',
+      BASE + '/workbox/workbox-strategies.prod.js',
+      BASE + '/workbox/workbox-expiration.prod.js',
+      BASE + '/workbox/workbox-cacheable-response.prod.js',
+      BASE + '/workbox/workbox-precaching.prod.js'
     );
   }
 } catch (e) {
@@ -43,25 +48,26 @@ if (typeof workbox !== 'undefined') {
     runtime: 'runtime',
   });
 
-  // Precache list of essential shell assets and baseline database
+  // Precache list of essential shell assets and baseline database.
+  // NOTE: static export ships no /api/database — the DB lives at
+  // <base>/output/database.json and is served by the static host.
   const PRECACHE_SHELL = [
-    '/',
-    '/api/database',
-    '/output/database.json',
-    '/manifest.json',
-    '/icon.svg',
-    '/apple-touch-icon.png',
-    '/pwa-192x192.png',
-    '/pwa-512x512.png',
-    '/pwa-maskable-512x512.png',
-    '/favicon.ico',
+    BASE + '/',
+    BASE + '/output/database.json',
+    BASE + '/manifest.webmanifest',
+    BASE + '/icon.svg',
+    BASE + '/apple-touch-icon.png',
+    BASE + '/pwa-192x192.png',
+    BASE + '/pwa-512x512.png',
+    BASE + '/pwa-maskable-512x512.png',
+    BASE + '/favicon.ico',
   ];
 
   // 1. CABI Diagnostic Database & API Endpoint: StaleWhileRevalidate
   // Critical for field use: Instant response from offline cache while fetching updates in background
   workbox.routing.registerRoute(
     ({ url }) =>
-      url.pathname.startsWith('/api/database') ||
+      url.pathname.startsWith(BASE + '/api/database') ||
       url.pathname.includes('/output/database.json') ||
       url.pathname.endsWith('database.json'),
     new workbox.strategies.StaleWhileRevalidate({
@@ -106,7 +112,7 @@ if (typeof workbox !== 'undefined') {
       request.destination === 'script' ||
       request.destination === 'style' ||
       request.destination === 'font' ||
-      url.pathname.startsWith('/_next/static/'),
+      url.pathname.startsWith(BASE + '/_next/static/'),
     new workbox.strategies.StaleWhileRevalidate({
       cacheName: 'cabi-static-assets-v1',
       plugins: [
@@ -141,7 +147,7 @@ if (typeof workbox !== 'undefined') {
       } catch (err) {
         console.warn('[Workbox SW] Navigation offline fallback triggered:', err);
       }
-      const fallback = await caches.match('/');
+      const fallback = await caches.match(BASE + '/');
       if (fallback) return fallback;
       return new Response(
         '<!DOCTYPE html><html><head><meta charset="utf-8"><title>CABI Plant Assistant - Offline</title></head><body style="font-family:sans-serif;padding:2rem;text-align:center;background:#022c22;color:#ecfdf5"><h2>CABI Plant Diagnosis Guide</h2><p>You are currently offline in the field. Please ensure the app was opened at least once while online.</p><button onclick="window.location.reload()" style="padding:10px 20px;background:#059669;color:white;border:none;border-radius:8px;cursor:pointer">Retry Connection</button></body></html>',
@@ -181,14 +187,14 @@ if (typeof workbox !== 'undefined') {
     self.skipWaiting();
     event.waitUntil(
       caches.open('cabi-fallback-v1').then((cache) => {
-        return cache.addAll(['/', '/api/database', '/output/database.json']).catch(() => {});
+        return cache.addAll([BASE + '/', BASE + '/output/database.json']).catch(() => {});
       })
     );
   });
 
   self.addEventListener('fetch', (event) => {
     event.respondWith(
-      caches.match(event.request).then((res) => res || fetch(event.request).catch(() => caches.match('/')))
+      caches.match(event.request).then((res) => res || fetch(event.request).catch(() => caches.match(BASE + '/')))
     );
   });
 }

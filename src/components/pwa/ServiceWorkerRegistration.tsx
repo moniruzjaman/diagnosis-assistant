@@ -16,7 +16,10 @@ export function ServiceWorkerRegistration() {
     if (typeof window !== "undefined" && "requestIdleCallback" in window) {
       window.requestIdleCallback(() => {
         try {
-          fetch("/api/database", { signal: controller.signal })
+          // Static export ships the DB as a file — no /api route exists.
+          // Honour the basePath exactly like staticDatabase.ts does.
+          const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+          fetch(`${basePath}/output/database.json`, { signal: controller.signal })
             .then((res) => res.json())
             .then((data) => {
               if (data && Array.isArray(data.diagnostic_keys)) {

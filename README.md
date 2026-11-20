@@ -2,7 +2,7 @@
 
 An interactive, AI-powered digital guide to identify crop diseases and pests using visual symptom categories from the **CABI Plantwise Field Diagnostic Guide**.
 
-Built with **Next.js 16 + TypeScript + Tailwind CSS 4 + shadcn/ui**, and powered by **GLM-4.5V** (multimodal vision) and **GLM-4.6** (text) via the `z-ai-web-dev-sdk` — no API key required by the user (bypass SDK).
+Built with **Next.js 16 + TypeScript + Tailwind CSS 4 + shadcn/ui** as a fully static site. AI diagnosis is **bring-your-own-key** (any OpenAI-compatible API — OpenRouter free models by default) with a built-in offline heuristic fallback, so no secret ever lives in the repo. Ships as a **mobile-first, Bangla-first installable PWA** with offline caching.
 
 ![CABI AI Doctor Diagnosis Screenshot](download/cabi-byok-settings.png)
 
@@ -26,18 +26,23 @@ Built with **Next.js 16 + TypeScript + Tailwind CSS 4 + shadcn/ui**, and powered
 
 ## Tech Stack
 
-- **Framework**: Next.js 16 (App Router)
+- **Framework**: Next.js 16 (App Router) — static export (`output: "export"`)
 - **Language**: TypeScript 5
 - **Styling**: Tailwind CSS 4 + shadcn/ui
-- **AI**: `z-ai-web-dev-sdk` (GLM-4.5V for vision, GLM-4.6 for text) — bypass API key
+- **AI**: bring-your-own-key, any OpenAI-compatible API (default OpenRouter free models) + offline heuristic fallback
+- **PWA**: Workbox service worker (self-hosted), web app manifest, offline precache
 - **Animations**: `motion` (Framer Motion)
 - **Icons**: `lucide-react`
-- **Database**: Prisma (SQLite) — scaffold only; diagnosis uses in-memory cache
+- **Database**: Prisma (SQLite) — scaffold only; diagnosis runs client-side
 
-## API Routes
+## Data & Offline PWA
 
-- `GET /api/database` — Serves the CABI diagnostic database with three-tier fallback: local cache → GitHub raw fetch → offline mock.
-- `POST /api/diagnose` — Multimodal AI diagnosis endpoint. Body: `{ symptomDescription: string, image?: string (base64 data URL), locale?: "bn" | "en" }`. Uses `createVision()` for image+text and `create()` for text-only, both with `thinking: enabled` for high-accuracy reasoning.
+There is **no server** — the site is a static export served by GitHub Pages:
+
+- `public/output/database.json` — the CABI diagnostic database, fetched by the browser at `<site>/output/database.json` with a built-in offline fallback if the fetch fails.
+- `public/sw.js` — self-hosted Workbox service worker: precaches the app shell, stale-while-revalidate for the database, cache-first for specimen images, network-first for navigation with an offline fallback page. All paths derive from the registration scope, so the worker works both at site root and under the GitHub Pages project path.
+- `public/og-image.png` — 1200×630 social preview image, wired via OpenGraph + Twitter card metadata in `src/app/layout.tsx` (covers WhatsApp, Facebook, LinkedIn, Telegram, Discord, Slack, iMessage, X/Twitter).
+- Installable on Android/iOS (`manifest.webmanifest`, maskable icons, `Service-Worker` registration via `workbox-window`).
 
 ## Getting Started
 
@@ -56,22 +61,27 @@ bun run dev  # or npm run dev
 ```
 src/
 ├── app/
-│   ├── api/
-│   │   ├── database/route.ts      # CABI database proxy with cache + fallback
-│   │   └── diagnose/route.ts      # ZAI SDK bypass diagnosis endpoint
-│   ├── layout.tsx                 # Root layout + metadata
+│   ├── layout.tsx                 # Root layout: metadata, OG/Twitter tags, PWA meta
+│   ├── manifest.ts                # Web app manifest (generated at build)
 │   ├── page.tsx                   # Renders <PlantApp />
 │   └── globals.css
 ├── components/
 │   ├── PlantApp.tsx               # Main client component (5 features)
+│   ├── DiagnosticReportModal.tsx  # Diagnosis report viewer
+│   ├── pwa/                       # SW registration, install button, offline indicator
 │   └── ui/                        # shadcn/ui components
+├── hooks/                         # usePWAInstall, useOnlineStatus, use-mobile
 └── lib/
-    ├── types.ts                   # AIDiagnosisResult, DiagnosticKey, etc.
+    ├── types.ts                   # AIDiagnosisResult, DatabaseSchema, etc.
     ├── translations.ts            # Bangla/English translations
-    ├── db.ts                      # Prisma client
+    ├── staticDatabase.ts          # Client-side DB loader + offline fallback
+    ├── staticDiagnose.ts          # Resolution order: live AI → heuristic
+    ├── freeAiDiagnose.ts          # BYOK OpenAI-compatible diagnosis
     └── utils.ts                   # cn() helper
 public/
-└── output/database.json           # Cached CABI database (40KB, 118 pages)
+├── output/database.json           # CABI database, served statically
+├── sw.js + workbox/               # Self-hosted Workbox service worker
+└── og-image.png                   # 1200×630 social share preview
 ```
 
 ## How the AI Diagnosis Works
@@ -102,6 +112,22 @@ Both paths build the same CABI Plantwise-structured prompt and parse the respons
 The diagnosis then runs against the live model. Clear the key any time from the same panel to return to the offline heuristic.
 
 > **Why bring-your-own-key?** Truly key-less browser AI endpoints now all gate access: Pollinations requires a Cloudflare Turnstile token, Groq blocks CORS, and Puter.js requires a login. OpenRouter is the one free-tier provider that sends permissive CORS headers, so it is the only one callable directly from a static site. The trade-off is one key the user supplies themselves.
+
+## Deployment (GitHub Pages)
+
+Deploys automatically on every push to `main` via `.github/workflows/deploy.yml`:
+bun install → `bun run build` (static export to `out/`) → `.nojekyll` → `actions/deploy-pages@v4`.
+
+Live URL: **https://moniruzjaman.github.io/diagnosis-assistant/**
+
+Everything is wired for the project-site path:
+
+- `next.config.ts` — `basePath: "/diagnosis-assistant"`, `trailingSlash: true`, `images.unoptimized`
+- `src/app/layout.tsx` — `metadataBase`, canonical URL, and OG/Twitter image URLs carry the basePath prefix
+- `public/sw.js` — all cache paths derive from the service-worker registration scope, so offline caching works under the project path too
+- `404.html` — generated by the static export; GitHub Pages serves it for unknown routes
+
+Prerequisites in the repo settings: **Settings → Pages → Source: GitHub Actions**. Optionally upload `public/og-image.png` as the repo **Social preview** (Settings → General) for the repo-link card.
 
 ## License
 
