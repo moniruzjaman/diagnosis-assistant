@@ -19,6 +19,12 @@ Built with **Next.js 16 + TypeScript + Tailwind CSS 4 + shadcn/ui** as a fully s
 4. **Crop Auditor Quiz** — Visual quiz that tests symptom identification skills against the CABI reference database.
 5. **Local Scan History** — Persisted diagnosis logs in `localStorage` for review.
 
+## Product boundary and ecosystem role
+
+This repository is the visual training and practice surface. It is not the canonical operational diagnosis record, field-geofence service, pesticide registry or regulatory recommendation engine. Use [CABI Diagnosis](https://github.com/moniruzjaman/cabi-diagnosis) for the operational workflow and [Diagnostic Field Guide](https://github.com/moniruzjaman/diagnostic-field-guide) for the offline reading reference.
+
+Training feedback is educational, not a verified diagnosis or spray instruction. Keep the existing offline heuristic available when AI credentials or connectivity are absent. Do not copy translated Plantwise/CABI passages, tables, images or captions into this app without confirming the CC BY-NC licence and attribution requirements.
+
 ## Bilingual
 
 - 🇧🇩 **Bangla** (default) — full agricultural Bangla translations
